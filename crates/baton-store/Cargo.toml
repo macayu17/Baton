@@ -1,0 +1,29 @@
+[package]
+name = "baton-store"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+experimental = ["dep:rusqlite", "dep:blake3", "dep:serde_json", "dep:serde", "dep:baton-checkpoint", "baton-checkpoint/experimental", "baton-platform/process"]
+
+[dependencies]
+baton-protocol = { path = "../baton-protocol" }
+baton-platform = { path = "../baton-platform" }
+rusqlite = { workspace = true, optional = true }
+blake3 = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+baton-checkpoint = { path = "../baton-checkpoint", optional = true }
+
+[dev-dependencies]
+baton-test-support = { path = "../baton-test-support" }
+tempfile.workspace = true
+
+[[test]]
+name = "metadata"
+required-features = ["experimental"]
+
+[lints]
+workspace = true

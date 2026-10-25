@@ -1,0 +1,34 @@
+[package]
+name = "baton-cli"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+experimental = ["baton-store/experimental", "baton-platform/ipc", "dep:tokio", "dep:serde_json", "dep:clap"]
+
+[dependencies]
+baton-protocol = { path = "../baton-protocol" }
+baton-store = { path = "../baton-store" }
+baton-platform = { path = "../baton-platform" }
+tokio = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+clap = { version = "4", features = ["derive"], optional = true }
+
+[[bin]]
+name = "baton"
+path = "src/main.rs"
+required-features = ["experimental"]
+
+[[test]]
+name = "local_cli"
+required-features = ["experimental"]
+
+[dev-dependencies]
+baton-test-support = { path = "../baton-test-support" }
+tempfile.workspace = true
+rusqlite.workspace = true
+
+[lints]
+workspace = true

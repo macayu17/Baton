@@ -1,0 +1,22 @@
+[workspace]
+members = ["crates/baton-protocol", "crates/baton-test-support", "crates/baton-store", "crates/baton-checkpoint", "crates/baton-supervisor", "crates/baton-platform", "crates/baton-cli", "crates/baton-adapter-codex"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+uuid = { version = "1", features = ["v4", "serde"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
+blake3 = "1"
+zstd = "0.14"
+unicode-normalization = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "signal"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"

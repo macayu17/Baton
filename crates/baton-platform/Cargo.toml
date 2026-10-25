@@ -1,0 +1,38 @@
+[package]
+name = "baton-platform"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+ipc = ["dep:interprocess", "dep:tokio", "dep:widestring"]
+process = ["dep:process-wrap", "dep:blake3", "dep:win32job", "dep:windows"]
+
+[dependencies]
+baton-protocol = { path = "../baton-protocol" }
+blake3 = { workspace = true, optional = true }
+process-wrap = { version = "=10.0.1", default-features = false, features = ["std", "job-object", "creation-flags", "process-group"], optional = true }
+interprocess = { version = "=2.4.6", features = ["tokio"], optional = true }
+tokio = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-permissions = "=0.2.4"
+win32job = { version = "=2.0.3", optional = true }
+windows = { version = "0.62", features = ["Win32_System_Threading"], optional = true }
+winapi-util = "0.1"
+widestring = { version = "1", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["process"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio.workspace = true
+
+[[test]]
+name = "ipc"
+required-features = ["ipc"]
+
+[lints]
+workspace = true

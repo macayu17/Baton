@@ -1,0 +1,30 @@
+[package]
+name = "baton-supervisor"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+experimental = ["baton-store/experimental", "baton-platform/process"]
+
+[dependencies]
+baton-protocol = { path = "../baton-protocol" }
+baton-store = { path = "../baton-store" }
+baton-platform = { path = "../baton-platform" }
+
+[dev-dependencies]
+baton-test-support = { path = "../baton-test-support" }
+tempfile.workspace = true
+
+[[bin]]
+name = "baton-fake-agent"
+path = "tests/support/fake_agent.rs"
+required-features = ["experimental"]
+
+[[test]]
+name = "supervision"
+required-features = ["experimental"]
+
+[lints]
+workspace = true

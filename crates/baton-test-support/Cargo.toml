@@ -1,0 +1,12 @@
+[package]
+name = "baton-test-support"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+baton-protocol = { path = "../baton-protocol" }
+tempfile.workspace = true
+
+[lints]
+workspace = true
