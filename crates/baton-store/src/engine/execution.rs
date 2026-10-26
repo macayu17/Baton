@@ -154,7 +154,7 @@ impl Store {
             if event.binding != record.binding || event.operation_id != operation {
                 return Err(error(ErrorCode::CorruptStore));
             }
-            verify_adapter_event(&tx, &event)?;
+            verify_execution_event(&tx, &event)?;
             Ok(event)
         })
         .transpose()
@@ -349,7 +349,7 @@ impl Store {
             if event.binding != record.binding || event.sequence != events.len() as u64 + 1 {
                 return Err(error(ErrorCode::CorruptStore));
             }
-            verify_adapter_event(&tx, &event)?;
+            verify_execution_event(&tx, &event)?;
             events.push(event);
         }
         let count: i64 = tx
@@ -398,16 +398,35 @@ pub(super) fn load(c: &Connection, task: Id, run: Id) -> Result<RunRecord, Diagn
         return Err(error(ErrorCode::CorruptStore));
     }
     adapter_history(c, &record.binding)?;
+    if count == 0 {
+        if record
+            != RunRecord::pending(
+                record.binding.clone(),
+                record.launch_fingerprint.clone(),
+                record.capabilities.clone(),
+            )
+        {
+            return Err(error(ErrorCode::CorruptStore));
+        }
+    } else {
+        let expected: String = c.query_row(
+            "SELECT json_extract(record,'$.state_hash') FROM execution_events WHERE run_id=?1 ORDER BY sequence DESC LIMIT 1",
+            [run.to_string()], |row| row.get(0),
+        ).db()?;
+        if expected != run_hash(&record)? {
+            return Err(error(ErrorCode::CorruptStore));
+        }
+    }
     Ok(record)
 }
 
-fn verify_adapter_event(c: &Connection, event: &ExecutionEvent) -> Result<(), Diagnostic> {
-    if !matches!(
-        event.observation,
-        RunObservation::AdapterReported { .. } | RunObservation::AdapterGap { .. }
-    ) {
-        return Ok(());
-    }
+fn run_hash(record: &RunRecord) -> Result<String, Diagnostic> {
+    Ok(blake3::hash(encode(record)?.as_bytes())
+        .to_hex()
+        .to_string())
+}
+
+fn verify_execution_event(c: &Connection, event: &ExecutionEvent) -> Result<(), Diagnostic> {
     let json: String = c
         .query_row(
             "SELECT record FROM events WHERE task_id=?1 AND sequence=?2",
@@ -436,6 +455,41 @@ fn verify_adapter_event(c: &Connection, event: &ExecutionEvent) -> Result<(), Di
     }
     Ok(())
 }
+
+pub(super) fn verify_cached(
+    c: &Connection,
+    request: &Request,
+    cached: &RunRecord,
+) -> Result<(), Diagnostic> {
+    let Action::ObserveRun {
+        task_id,
+        run_id,
+        lease_id,
+        ..
+    } = request.action
+    else {
+        return Err(error(ErrorCode::CorruptStore));
+    };
+    if cached.binding.task_id != task_id
+        || cached.binding.run_id != run_id
+        || cached.binding.lease_id != lease_id
+        || cached.binding.actor_id != request.actor_id
+        || cached.binding.epoch != request.expected_epoch
+    {
+        return Err(error(ErrorCode::CorruptStore));
+    }
+    load(c, task_id, run_id)?;
+    let json: String = c.query_row(
+        "SELECT record FROM execution_events WHERE run_id=?1 AND json_extract(record,'$.operation_id')=?2",
+        params![run_id.to_string(), request.operation_id.to_string()], |row| row.get(0),
+    ).optional().db()?.ok_or_else(|| error(ErrorCode::CorruptStore))?;
+    let event: ExecutionEvent = decode(&json)?;
+    verify_execution_event(c, &event)?;
+    if event.binding != cached.binding || event.state_hash != run_hash(cached)? {
+        return Err(error(ErrorCode::CorruptStore));
+    }
+    Ok(())
+}
 pub(super) fn adapter_history(
     c: &Connection,
     binding: &RunBinding,
@@ -444,12 +498,17 @@ pub(super) fn adapter_history(
         .prepare("SELECT record FROM execution_events WHERE run_id=?1 ORDER BY sequence")
         .db()?;
     let mut history = vec![];
+    let mut sequence = 0;
     for row in statement
         .query_map([binding.run_id.to_string()], |row| row.get::<_, String>(0))
         .db()?
     {
         let event: ExecutionEvent = decode(&row.db()?)?;
-        verify_adapter_event(c, &event)?;
+        verify_execution_event(c, &event)?;
+        sequence += 1;
+        if &event.binding != binding || event.sequence != sequence {
+            return Err(error(ErrorCode::CorruptStore));
+        }
         if let RunObservation::AdapterReported {
             event: ref adapter, ..
         } = event.observation
@@ -564,15 +623,13 @@ pub(super) fn apply(
                 operation_id: r.operation_id,
                 timestamp_ms: now,
                 origin: observation.origin(),
+                state_hash: run_hash(&record)?,
                 evidence_hash: None,
                 observation: observation.clone(),
             };
-            let evidence = matches!(
-                observation,
-                RunObservation::AdapterReported { .. } | RunObservation::AdapterGap { .. }
-            )
-            .then(|| encode(&event).map(|json| blake3::hash(json.as_bytes()).to_hex().to_string()))
-            .transpose()?;
+            let evidence = blake3::hash(encode(&event)?.as_bytes())
+                .to_hex()
+                .to_string();
             append_event(
                 c,
                 r,
@@ -580,7 +637,7 @@ pub(super) fn apply(
                 now,
                 EventKind::ExecutionObserved,
                 None,
-                evidence.as_deref(),
+                Some(&evidence),
             )?;
             c.execute(
                 "INSERT INTO execution_events VALUES (?1,?2,?3)",

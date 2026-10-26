@@ -103,8 +103,39 @@ image and goal tools, but the strict Baton-only inventory probe still finds
 request_user_input and fails. This is test-only compatibility evidence, not a
 real model or source grant. Schema 15 adds input blocking and dynamic failure
 responses, durable identity/payload binding and negative native callback probes.
-Positive bounded permit integration, complete source capture and real source-work
-proof remain missing. See ADR-032/033; stay within M5.
+The native Session now has a create-only host operation backed by fresh tool
+permits, held directory identity and byte readback; existing files and ambiguous
+partial results are preserved. Schema 16 adds opt-in baton_create_file_v1 callbacks
+through that host operation, with intent/completion/response/resolution separated
+and synthetic native peers tested. Native Codex registration/positive callbacks,
+complete source capture and real source-work proof remain missing. See
+ADR-032–035. Schema 17 now supplies explicit experimental initialization and
+audited ephemeral thread registration through Source, including an actual native
+registration test without a model request. Startup effects remain Unknown and
+block subsequent writes; validated startup policy, native positive work and
+complete capture/safe stopping remain open. See ADR-036; stay within M5.
+
+Schema 18 now checks execution summaries and observed-run cached replies against
+journal-bound post-transition state hashes. This closes reproduced corruption
+paths through the uncertain-startup gate without settling startup effects or
+opening source activation. See ADR-037 and M5-SG01–03.
+
+Schema 19 adds pre-registration config/read with audited summary and rejection of
+reported executable service configuration. Native M5-SP01 demonstrated that a
+configured MCP child can run under read-only thread metadata before any model
+turn. The new rejection gate does not freeze configuration or settle Unknown
+startup; validated isolation and real source-work proof remain open. See ADR-038.
+
+Launch-v2 now includes main-executable bytes and pre-spawn identity/digest checks,
+with Windows file sharing held through the native scope lifetime. This closes
+same-path admission drift without claiming dependency or startup confinement.
+Schema remains 19. See ADR-039/M5-B01–04; M5 is still the current milestone.
+
+An opt-in native containment tracer now compares an uncontained Rust fixture with
+Microsoft MXC base-container policy. Allowed reads and denied file/network access
+have bounded Windows evidence without host DACL/BFS fallback. This is not a
+production backend or Codex isolation proof; policy binding, lifecycle/crash
+handling and actual source work remain open. See ADR-040/M5-NC01–04.
 
 **Targets:** `FR-03`, `FR-06`, `FR-10`, `FR-15`.
 

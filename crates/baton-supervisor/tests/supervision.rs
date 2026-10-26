@@ -203,6 +203,9 @@ impl Fixture {
         Self::with_temp(tempfile::tempdir().unwrap())
     }
     fn with_temp(temp: tempfile::TempDir) -> Self {
+        Self::with_scope(temp, "temp")
+    }
+    fn with_scope(temp: tempfile::TempDir, scope: &str) -> Self {
         let clock = Arc::new(TestClock(AtomicI64::new(1000)));
         let mut store = Store::create(&temp.path().join("state"), clock.clone()).unwrap();
         let actor = store.create_local_actor().unwrap();
@@ -224,7 +227,7 @@ impl Fixture {
                 task_id: task,
                 repository_id,
                 goal: "synthetic process test".into(),
-                scope: "temp".into(),
+                scope: scope.into(),
                 agent: AgentMetadata {
                     name: "fake-agent".into(),
                     version: "0.1".into(),
@@ -255,9 +258,13 @@ impl Fixture {
         }
     }
     fn launch(&mut self, mode: &str) -> Session {
+        let cwd = self.temp.path().to_path_buf();
+        self.launch_in(mode, &cwd)
+    }
+    fn launch_in(&mut self, mode: &str, cwd: &Path) -> Session {
         let spec = LaunchSpec::new(
             Path::new(env!("CARGO_BIN_EXE_baton-fake-agent")),
-            self.temp.path(),
+            cwd,
             [mode.into(), self.temp.path().as_os_str().to_owned()],
         )
         .unwrap();
@@ -291,6 +298,126 @@ fn until(mut condition: impl FnMut() -> bool) {
     while !condition() {
         assert!(Instant::now() < end, "observed condition timed out");
         thread::sleep(Duration::from_millis(10));
+    }
+}
+
+// M5-W04; FR-03/06/14, INV-04/05/07/09: concrete writes require fresh native admission.
+#[test]
+fn host_file_creation_is_audited_and_never_replayed() {
+    let mut f = Fixture::with_scope(tempfile::tempdir().unwrap(), ".");
+    let cwd = f._repo.path().to_path_buf();
+    let mut session = f.launch_in("wait", &cwd);
+    let operation = Id::new_v4();
+    session
+        .create_file(&mut f.store, &f.actor, operation, "new.txt", b"evidence")
+        .unwrap();
+    assert_eq!(std::fs::read(cwd.join("new.txt")).unwrap(), b"evidence");
+    let run = f
+        .store
+        .run(&f.actor, f.task, session.binding().run_id)
+        .unwrap();
+    assert_eq!(run.effects.len(), 1);
+    assert_eq!(run.effects[0].state, EffectState::Completed);
+    assert_eq!(run.effects[0].outcome, Some(ToolOutcome::Succeeded));
+    assert!(f
+        .store
+        .execution_event(&f.actor, f.task, run.binding.run_id, operation)
+        .unwrap()
+        .is_some());
+    std::fs::remove_file(cwd.join("new.txt")).unwrap();
+    assert!(session
+        .create_file(&mut f.store, &f.actor, operation, "new.txt", b"evidence")
+        .is_err());
+    assert!(!cwd.join("new.txt").exists());
+    assert_eq!(
+        session
+            .create_file(&mut f.store, &f.actor, operation, "other.txt", b"changed")
+            .unwrap_err()
+            .code,
+        ErrorCode::IdempotencyConflict
+    );
+    assert!(!cwd.join("other.txt").exists());
+    session
+        .stop(&mut f.store, &f.actor, Duration::from_secs(5))
+        .unwrap();
+    assert!(session
+        .create_file(&mut f.store, &f.actor, Id::new_v4(), "late.txt", b"no")
+        .is_err());
+    assert!(!cwd.join("late.txt").exists());
+}
+
+// M5-W05; INV-05/09: ambiguous failed creation preserves work and stops the scope.
+#[test]
+fn host_file_creation_failure_preserves_existing_work_and_stops() {
+    let mut f = Fixture::with_scope(tempfile::tempdir().unwrap(), ".");
+    let cwd = f._repo.path().to_path_buf();
+    std::fs::write(cwd.join("existing.txt"), b"preserve").unwrap();
+    let mut session = f.launch_in("wait", &cwd);
+    assert!(session
+        .create_file(
+            &mut f.store,
+            &f.actor,
+            Id::new_v4(),
+            "existing.txt",
+            b"overwrite"
+        )
+        .is_err());
+    assert_eq!(
+        std::fs::read(cwd.join("existing.txt")).unwrap(),
+        b"preserve"
+    );
+    let run = f
+        .store
+        .run(&f.actor, f.task, session.binding().run_id)
+        .unwrap();
+    assert_eq!(run.state, RunState::RecoveryRequired);
+    assert_eq!(run.effects[0].state, EffectState::Uncertain);
+    until(|| session.root_exited().unwrap());
+}
+
+// M5-W06; FR-06/14, INV-04/06: admission failures must precede filesystem writes.
+#[test]
+fn host_file_creation_refuses_expiry_transfer_and_wrong_workspace() {
+    for reason in ["expiry", "transfer", "workspace"] {
+        let mut f = Fixture::with_scope(tempfile::tempdir().unwrap(), ".");
+        let repo = f._repo.path().to_path_buf();
+        let cwd = if reason == "workspace" {
+            f.temp.path().to_path_buf()
+        } else {
+            repo.clone()
+        };
+        let mut session = f.launch_in("wait", &cwd);
+        match reason {
+            "expiry" => f.clock.0.store(301_000, Ordering::SeqCst),
+            "transfer" => {
+                f.store
+                    .execute(
+                        &f.actor,
+                        &req(
+                            &f.actor,
+                            Action::RequestTransfer {
+                                task_id: f.task,
+                                lease_id: f.lease.lease_id,
+                                transfer_id: Id::new_v4(),
+                                receiver_id: f.actor.id(),
+                            },
+                        ),
+                    )
+                    .unwrap();
+            }
+            _ => (),
+        }
+        assert!(
+            session
+                .create_file(&mut f.store, &f.actor, Id::new_v4(), "denied.txt", b"no")
+                .is_err(),
+            "{reason}"
+        );
+        assert!(!cwd.join("denied.txt").exists());
+        assert!(!repo.join("denied.txt").exists());
+        // Expired authority can refuse the final journal even after native teardown.
+        let _ = session.stop(&mut f.store, &f.actor, Duration::from_secs(5));
+        until(|| session.root_exited().unwrap());
     }
 }
 
@@ -501,6 +628,49 @@ fn changed_launch_parameters_cannot_consume_permission_for_another_command() {
     assert!(record
         .blockers()
         .contains(&BoundaryReason::AdapterUnsupported));
+    assert!(f
+        .store
+        .prepare_launch(&f.actor, &request)
+        .unwrap()
+        .1
+        .is_none());
+}
+
+// M5-B04; FR-03/12/15, INV-04/07/09: changed bytes cannot use a same-path launch reservation.
+#[test]
+fn changed_executable_cannot_consume_original_launch_permission() {
+    let mut f = Fixture::new();
+    let program = f.temp.path().join("owned-program.exe");
+    std::fs::write(&program, b"original program").unwrap();
+    let fingerprint = LaunchSpec::new(&program, f.temp.path(), [])
+        .unwrap()
+        .fingerprint();
+    let run_id = Id::new_v4();
+    let request = req(
+        &f.actor,
+        Action::OpenRun {
+            task_id: f.task,
+            lease_id: f.lease.lease_id,
+            run_id,
+            launch_fingerprint: fingerprint,
+            capabilities: AdapterCapabilities {
+                lifecycle: false,
+                tool_outcomes: false,
+                interrupt: false,
+                mutation_gating: false,
+            },
+        },
+    );
+    let (_, permit) = f.store.prepare_launch(&f.actor, &request).unwrap();
+    std::fs::write(&program, b"changed program!").unwrap();
+    let changed = LaunchSpec::new(&program, f.temp.path(), []).unwrap();
+    assert!(
+        matches!(Session::launch(&mut f.store, &f.actor, permit.unwrap(), changed), Err(error) if error.code == ErrorCode::InvalidInput)
+    );
+    assert_eq!(
+        f.store.run(&f.actor, f.task, run_id).unwrap().state,
+        RunState::LaunchPending
+    );
     assert!(f
         .store
         .prepare_launch(&f.actor, &request)

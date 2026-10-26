@@ -3,8 +3,8 @@
 Status: experimental forensic slice implemented, disabled by default. Full M2
 exit gate remains open; no VERIFIED continuation is claimed.
 
-This report records the M2 schema-2 implementation. Current M4 stores use schema
-8 and refuse older stores; see `M4-IMPLEMENTATION.md` for current database behavior.
+This report records the M2 schema-2 implementation. Current M5 stores use schema
+19 and refuse older stores; see `M5-IMPLEMENTATION.md` for current database behavior.
 
 The user authorized M2 after the M1 report. Native M0 validation and the M1
 production identity/ACL gaps remain pending; no release gate is waived.

@@ -16,6 +16,7 @@ pub struct Session {
     binding: RunBinding,
     transfer: Option<Id>,
     native: native::Native,
+    workspace: baton_platform::workspace::Workspace,
 }
 impl Session {
     pub fn launch(
@@ -30,6 +31,7 @@ impl Session {
         }
         let binding = permit.record().binding.clone();
         let transfer = permit.transfer_id();
+        let workspace = baton_platform::workspace::Workspace::open(spec.working_directory())?;
         let native = match native::Native::spawn(spec) {
             Ok(child) => child,
             Err(e) => {
@@ -47,6 +49,7 @@ impl Session {
             binding,
             transfer,
             native,
+            workspace,
         };
         // Failure drops the live control, terminating the managed tree.
         store.record_native_spawn(actor, &permit, &session.native, Id::new_v4())?;
@@ -54,6 +57,9 @@ impl Session {
     }
     pub fn binding(&self) -> &RunBinding {
         &self.binding
+    }
+    pub fn working_directory(&self) -> &std::path::Path {
+        self.native.working_directory()
     }
     pub fn take_stdio(
         &mut self,
@@ -113,6 +119,110 @@ impl Session {
         }
         let proof = self.native.running_proof()?;
         store.consume_tool(actor, permit, &proof)
+    }
+    /// Trusted host create-only operation. Historical intent never replays a write.
+    pub fn create_file(
+        &mut self,
+        store: &mut Store,
+        actor: &Actor,
+        operation_id: Id,
+        name: &str,
+        bytes: &[u8],
+    ) -> Result<String, Diagnostic> {
+        baton_platform::workspace::Workspace::validate_name(name)?;
+        if bytes.len() > 16_384 || operation_id.is_nil() {
+            return Err(error(ErrorCode::InvalidInput));
+        }
+        let prior = store.execution_event(
+            actor,
+            self.binding.task_id,
+            self.binding.run_id,
+            operation_id,
+        )?;
+        let sequence = match prior.map(|event| event.observation) {
+            Some(RunObservation::ToolReserved {
+                source_sequence, ..
+            }) => source_sequence,
+            Some(_) => return Err(error(ErrorCode::IdempotencyConflict)),
+            None => store
+                .run(actor, self.binding.task_id, self.binding.run_id)?
+                .source_cursor
+                .checked_add(1)
+                .ok_or_else(|| error(ErrorCode::Blocked))?,
+        };
+        let mut hash = blake3::Hasher::new();
+        hash.update(b"baton-host-create-file-v1");
+        for id in [
+            self.binding.task_id,
+            self.binding.run_id,
+            self.binding.actor_id,
+            self.binding.lease_id,
+            operation_id,
+        ] {
+            hash.update(id.as_bytes());
+        }
+        hash.update(&self.binding.epoch.to_le_bytes());
+        hash.update(&sequence.to_le_bytes());
+        hash.update(&(name.len() as u64).to_le_bytes());
+        hash.update(name.as_bytes());
+        hash.update(bytes);
+        let mut identity = [0; 16];
+        identity.copy_from_slice(&hash.finalize().as_bytes()[..16]);
+        let effect_id = Id::from_bytes(identity);
+        let request = Request {
+            schema_version: SchemaVersion::V0_1_0,
+            operation_id,
+            actor_id: actor.id(),
+            expected_epoch: self.binding.epoch,
+            action: Action::ObserveRun {
+                task_id: self.binding.task_id,
+                run_id: self.binding.run_id,
+                lease_id: self.binding.lease_id,
+                observation: RunObservation::ToolReserved {
+                    source_sequence: sequence,
+                    effect_id,
+                    class: EffectClass::LocalReversible,
+                },
+            },
+        };
+        let (_, permit) = self.prepare_tool(store, actor, &request)?;
+        let permit = permit.ok_or_else(|| error(ErrorCode::Blocked))?;
+        let result = (|| {
+            self.workspace.verify()?;
+            self.authorize_tool(store, actor, permit)?;
+            record(
+                store,
+                actor,
+                &self.binding,
+                Id::new_v4(),
+                RunObservation::ToolStarted {
+                    source_sequence: sequence
+                        .checked_add(1)
+                        .ok_or_else(|| error(ErrorCode::Blocked))?,
+                    effect_id,
+                    class: EffectClass::LocalReversible,
+                },
+            )?;
+            let digest = self.workspace.create_file(name, bytes)?;
+            record(
+                store,
+                actor,
+                &self.binding,
+                Id::new_v4(),
+                RunObservation::ToolFinished {
+                    source_sequence: sequence
+                        .checked_add(2)
+                        .ok_or_else(|| error(ErrorCode::Blocked))?,
+                    effect_id,
+                    outcome: ToolOutcome::Succeeded,
+                },
+            )?;
+            Ok(digest)
+        })();
+        if result.is_err() {
+            let _ = self.connection_lost(store, actor);
+        }
+        result
     }
     /// Normalize/validate the adapter acknowledgement before calling this trusted host boundary.
     pub fn acknowledge_receiver(
@@ -175,6 +285,10 @@ impl Session {
         if !matches!(
             observation,
             RunObservation::ToolStarted { .. }
+                | RunObservation::StartupConfigReported { .. }
+                | RunObservation::ThreadRegistered { .. }
+                | RunObservation::ThreadAnnounced { .. }
+                | RunObservation::RemoteControlDisabled { .. }
                 | RunObservation::ToolFinished { .. }
                 | RunObservation::InterruptAcknowledged { .. }
                 | RunObservation::AdapterReported { .. }

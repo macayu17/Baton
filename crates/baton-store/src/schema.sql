@@ -88,4 +88,4 @@ CREATE UNIQUE INDEX receiver_stage_identity ON transfers(json_extract(record,'$.
 CREATE UNIQUE INDEX one_run_per_epoch ON runs(task_id,json_extract(record,'$.binding.epoch'));
 CREATE UNIQUE INDEX receiver_session_identity ON transfers(json_extract(record,'$.receiver_ready.session.session_id')) WHERE json_extract(record,'$.receiver_ready.session.session_id') IS NOT NULL;
 CREATE UNIQUE INDEX one_committed_grant_per_epoch ON transfers(task_id,json_extract(record,'$.committed_epoch')) WHERE json_extract(record,'$.committed_epoch') IS NOT NULL;
-PRAGMA user_version = 15;
+PRAGMA user_version = 19;

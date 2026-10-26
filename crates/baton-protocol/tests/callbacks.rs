@@ -11,6 +11,72 @@ fn event(kind: AdapterEventKind) -> AdapterEvent {
         event: kind,
     }
 }
+
+// M5-X01; FR-03/06/14/15, INV-04/07/09: execution is distinct from refusal.
+#[test]
+fn execution_callback_binds_result_and_cannot_rebind_refused_ids() {
+    let planned = event(AdapterEventKind::DynamicToolExecution(Box::new(
+        ToolExecutionCallback {
+            request_id: AdapterRequestId::Number(7),
+            correlation_id: "call-1".into(),
+            payload_hash: "a".repeat(64),
+            phase: CallbackPhase::Planned,
+            result_hash: None,
+        },
+    )));
+    let mut written = planned.clone();
+    if let AdapterEventKind::DynamicToolExecution(callback) = &mut written.event {
+        callback.phase = CallbackPhase::Written;
+        callback.result_hash = Some("b".repeat(64));
+    }
+    assert!(written.follows(&[]).is_err());
+    assert!(!written
+        .follows(&[event(AdapterEventKind::TurnStarted), planned.clone()])
+        .unwrap());
+    let mut resolved = written.clone();
+    if let AdapterEventKind::DynamicToolExecution(callback) = &mut resolved.event {
+        callback.phase = CallbackPhase::Resolved;
+    }
+    assert!(!resolved
+        .follows(&[planned.clone(), written.clone()])
+        .unwrap());
+    assert!(written
+        .follows(&[planned.clone(), resolved.clone()])
+        .is_err());
+    if let AdapterEventKind::DynamicToolExecution(callback) = &mut resolved.event {
+        callback.result_hash = Some("c".repeat(64));
+    }
+    assert!(resolved.follows(&[planned.clone(), written]).is_err());
+    assert_eq!(
+        RunObservation::AdapterReported {
+            source_sequence: 1,
+            event: planned.clone()
+        }
+        .origin(),
+        ExecutionOrigin::HostReported
+    );
+    let refused = event(AdapterEventKind::CallbackRefusal {
+        request_id: AdapterRequestId::Number(7),
+        correlation_id: "call-1".into(),
+        callback: CallbackKind::DynamicTool,
+        payload_hash: "a".repeat(64),
+        phase: CallbackPhase::Planned,
+    });
+    assert!(planned.follows(std::slice::from_ref(&refused)).is_err());
+    assert!(refused.follows(std::slice::from_ref(&planned)).is_err());
+    let approval = event(AdapterEventKind::ApprovalCancellationPlanned {
+        request_id: AdapterRequestId::Number(7),
+        item_id: "call-1".into(),
+        tool: AdapterToolKind::FileChange,
+    });
+    assert!(planned.follows(std::slice::from_ref(&approval)).is_err());
+    assert!(approval.follows(std::slice::from_ref(&planned)).is_err());
+    let mut invalid_written = planned;
+    if let AdapterEventKind::DynamicToolExecution(callback) = &mut invalid_written.event {
+        callback.phase = CallbackPhase::Written;
+    }
+    assert!(invalid_written.validate().is_err());
+}
 // M5-D01/U01; FR-03/06/14/15, INV-04/07/09: refusing a callback cannot authorize effects.
 #[test]
 fn callback_refusal_binds_payload_and_has_distinct_phases() {

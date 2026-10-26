@@ -106,6 +106,28 @@ pub enum RunState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
 pub enum RunObservation {
+    StartupConfigReported {
+        source_sequence: u64,
+        request_id: crate::AdapterRequestId,
+        payload_hash: String,
+        services_present: bool,
+    },
+    RemoteControlDisabled {
+        source_sequence: u64,
+        payload_hash: String,
+    },
+    ThreadAnnounced {
+        source_sequence: u64,
+        thread_id: String,
+        payload_hash: String,
+    },
+    ThreadRegistered {
+        source_sequence: u64,
+        effect_id: Id,
+        request_id: crate::AdapterRequestId,
+        payload_hash: String,
+        thread_id: String,
+    },
     Spawned {
         pid: u32,
     },
@@ -165,6 +187,8 @@ pub struct RunRecord {
     pub capabilities: AdapterCapabilities,
     pub state: RunState,
     pub pid: Option<u32>,
+    pub source_thread: Option<String>,
+    pub announced_thread: Option<String>,
     pub source_cursor: u64,
     pub event_gap: bool,
     pub tree_stopped: bool,
@@ -184,6 +208,8 @@ impl RunRecord {
             capabilities,
             state: RunState::LaunchPending,
             pid: None,
+            source_thread: None,
+            announced_thread: None,
             source_cursor: 0,
             event_gap: false,
             tree_stopped: false,
@@ -250,6 +276,18 @@ impl RunRecord {
             }
         }
         let sequence = match observation {
+            RunObservation::StartupConfigReported {
+                source_sequence, ..
+            } => Some(*source_sequence),
+            RunObservation::RemoteControlDisabled {
+                source_sequence, ..
+            } => Some(*source_sequence),
+            RunObservation::ThreadAnnounced {
+                source_sequence, ..
+            } => Some(*source_sequence),
+            RunObservation::ThreadRegistered {
+                source_sequence, ..
+            } => Some(*source_sequence),
             RunObservation::InterruptAcknowledged { source_sequence }
             | RunObservation::ToolReserved {
                 source_sequence, ..
@@ -278,6 +316,69 @@ impl RunRecord {
             self.source_cursor = sequence;
         }
         match observation {
+            RunObservation::StartupConfigReported {
+                request_id,
+                payload_hash,
+                ..
+            } => {
+                if self.state != RunState::Running
+                    || self.source_thread.is_some()
+                    || self.announced_thread.is_some()
+                    || !request_id.valid()
+                    || !crate::valid_evidence_hash(payload_hash)
+                {
+                    return Err(invalid());
+                }
+            }
+            RunObservation::RemoteControlDisabled { payload_hash, .. } => {
+                if self.state != RunState::Running || !crate::valid_evidence_hash(payload_hash) {
+                    return Err(invalid());
+                }
+            }
+            RunObservation::ThreadAnnounced {
+                thread_id,
+                payload_hash,
+                ..
+            } => {
+                if self.state != RunState::Running
+                    || self.announced_thread.is_some()
+                    || !crate::valid_adapter_id(thread_id)
+                    || !crate::valid_evidence_hash(payload_hash)
+                    || self
+                        .source_thread
+                        .as_ref()
+                        .is_some_and(|id| id != thread_id)
+                {
+                    return Err(invalid());
+                }
+                self.announced_thread = Some(thread_id.clone());
+            }
+            RunObservation::ThreadRegistered {
+                effect_id,
+                request_id,
+                payload_hash,
+                thread_id,
+                ..
+            } => {
+                if self.state != RunState::Running
+                    || self.source_thread.is_some()
+                    || self
+                        .announced_thread
+                        .as_ref()
+                        .is_some_and(|id| id != thread_id)
+                    || !request_id.valid()
+                    || !crate::valid_evidence_hash(payload_hash)
+                    || !crate::valid_adapter_id(thread_id)
+                    || !self.effects.iter().any(|effect| {
+                        effect.effect_id == *effect_id
+                            && effect.class == EffectClass::Unknown
+                            && effect.state == EffectState::Started
+                    })
+                {
+                    return Err(invalid());
+                }
+                self.source_thread = Some(thread_id.clone());
+            }
             RunObservation::AdapterGap { .. } => self.event_gap = true,
             RunObservation::AdapterReported { event, .. } => {
                 event.validate()?;
@@ -466,6 +567,7 @@ pub struct ExecutionEvent {
     pub operation_id: Id,
     pub timestamp_ms: i64,
     pub origin: ExecutionOrigin,
+    pub state_hash: String,
     pub evidence_hash: Option<String>,
     pub observation: RunObservation,
 }
@@ -483,11 +585,20 @@ impl RunObservation {
     pub fn origin(&self) -> ExecutionOrigin {
         match self {
             Self::ToolStarted { .. }
+            | Self::StartupConfigReported { .. }
+            | Self::ThreadRegistered { .. }
+            | Self::ThreadAnnounced { .. }
+            | Self::RemoteControlDisabled { .. }
             | Self::ToolFinished { .. }
             | Self::InterruptAcknowledged { .. } => ExecutionOrigin::AdapterObserved,
             Self::AdapterReported { event, .. } => match event.event {
                 crate::AdapterEventKind::CallbackRefusal { phase, .. }
                     if phase != crate::CallbackPhase::Resolved =>
+                {
+                    ExecutionOrigin::HostReported
+                }
+                crate::AdapterEventKind::DynamicToolExecution(ref callback)
+                    if callback.phase != crate::CallbackPhase::Resolved =>
                 {
                     ExecutionOrigin::HostReported
                 }

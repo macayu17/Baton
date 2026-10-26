@@ -10,6 +10,8 @@ pub mod ipc;
 pub mod process;
 #[cfg(windows)]
 mod windows;
+#[cfg(feature = "process")]
+pub mod workspace;
 
 fn failure(code: ErrorCode) -> Diagnostic {
     Diagnostic::new(code)

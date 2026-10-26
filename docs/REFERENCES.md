@@ -203,4 +203,94 @@ the local mock Responses provider emitted both expected callbacks. A fixed dynam
 failure reached the fixture in the next request; plan-mode input was observed and
 the owned scope stopped without an answer. These are raw-protocol compatibility
 tests, not a real model, complete production Source capture or source writer proof.
-Production initialization remains stable; experimental registration is test-only.
+At that increment production initialization remained stable and experimental
+registration was test-only. Schema 17 subsequently added explicit Source opt-in;
+see the thread registration compatibility note below. Startup remains uncertain.
+
+## M5 create-file callback bridge — 26 October 2026
+
+Rechecked installed native binary as Codex 0.164.0 and inspected generated public
+DynamicToolCallParams/Response schemas. Re-read the [official dynamic callback
+documentation](https://developers.openai.com/codex/app-server/), which redirects
+to ChatGPT Learn. The documented flow separates item start, host request/reply and
+item completion; dynamic tool registration still requires experimental opt-in.
+The schema supports a success flag with inputText result content and requires
+typed RPC identity plus arguments/callId/tool/threadId/turnId in the request.
+Baton uses a digest-only result, its own versioned strict recipe, and separate
+schema-16 execution metadata. Positive managed-peer tests exercise the production
+Source callback branch but not real vendor registration or model work. Stable
+initialization remains experimentalApi=false; no production writer/source grant
+or real model request is added. See ADR-035.
+
+## M5 thread registration compatibility — 26 October 2026
+
+Re-read the [official thread/dynamic-tool interface](https://developers.openai.com/codex/app-server/)
+and checked installed Codex 0.164.0 generated ThreadStartParams/Response,
+ThreadStartedNotification and RemoteControlStatusChangedNotification schemas.
+The registration response includes actual cwd/model/provider/approval/sandbox
+metadata and an ephemeral thread with history. Baton validates these fields rather
+than treating a successful RPC as capability proof. Native startup notifications
+also carry emittedAtMs at the JSONL envelope level; supported metadata validates
+that optional field and retains fingerprints instead of raw private fields.
+
+The actual native profile warns that tools.view_image is ignored. The test fixture
+removes that key and keeps the previously verified features.view_image=false flag.
+Native remote-control status was disabled; other states and configuration warnings
+remain unsupported and fail closed. Registration through Source passed without
+a model turn, using private synthetic state and an explicit loopback provider.
+The unknown startup effect remains uncertain; no source/writer safety capability
+is inferred. The earlier strict inventory failure is still a separate gate.
+See ADR-036 and M5-IMPLEMENTATION.md for exact tests and remaining limits.
+
+## M5 startup configuration compatibility — 26 October 2026
+
+Re-read the official [configuration layering](https://learn.chatgpt.com/docs/config-file/config-basic),
+[configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)
+and [App Server configuration RPC](https://learn.chatgpt.com/docs/app-server).
+Configuration is layered; a private CODEX_HOME is not a documented switch that
+disables all other layers. The reference separately defines lifecycle hooks and
+local MCP executable configuration. config/read reports the effective on-disk
+configuration; a reported value is not OS attestation or proof against later
+changes. Validate these controls against the installed version rather than
+equating thread sandbox metadata with process-startup confinement.
+
+M5-SP01 under installed Codex 0.164.0 demonstrates that a configured enabled MCP
+child can create a temporary marker outside the synthetic worktree even when
+thread/start reports readOnly, before any model turn. The disabled comparison
+does not create it. The child is only a bounded test executable, not a product
+MCP integration. This supports retaining the unknown-startup blocker; it does not
+prove all startup paths safe when that one server is disabled. See the M5 report.
+
+Schema 19 uses the same config/read includeLayers:false and bound cwd request.
+Its strict result envelope rejects ambiguous/mixed replies; known service tables
+and notify arrays are inspected without retaining their contents. Native SP05
+passes with both enabled and disabled configured entries rejected through Source,
+and R05 still passes for the profile without reported services. No successful
+inspection is promoted to isolation or startup reconciliation. See ADR-038.
+
+## M5 native containment compatibility — 26 October 2026
+
+Checked Microsoft's [AppContainer isolation](https://learn.microsoft.com/en-us/windows/win32/secauthz/appcontainer-isolation),
+[launch interface](https://learn.microsoft.com/en-us/windows/win32/secauthz/implementing-an-appcontainer)
+and [experimental sandbox process API](https://learn.microsoft.com/en-us/windows/win32/secauthz/createprocessinsandbox).
+Direct Rust process attribute support remains unstable in the
+[standard-library interface](https://doc.rust-lang.org/std/os/windows/process/trait.CommandExt.html).
+The tracer therefore evaluates the public native executor from
+[Microsoft MXC](https://github.com/microsoft/mxc), version 1.0.1, without changing
+Baton's stable toolchain or adding an unsafe-code exception.
+
+The pinned Rust crate source and published version-1.0.0 request fixture were
+inspected. The source build requires a Windows resource compiler not available
+here; it was not built. Instead, the @microsoft/mxc-sdk 1.0.1 archive was verified
+against registry SHA-512 integrity and its x64 executor had a Valid Microsoft
+Authenticode signature. See ADR-040 for its SHA-256.
+
+On Windows 10.0.26300.0, runtime probing selected base-container with native deny
+paths, no DACL augmentation, no BFS compilation and no warnings/errors. The actual
+benign fixture passed read/deny checks after LOCALAPPDATA was explicitly set to a
+private temporary path, as required by the executor's environment validation.
+Inherited environment and mutating fallback remained disabled. This establishes
+bounded compatibility, not Codex confinement, full SDK cleanup or production
+capability. Public OS release tables do not replace the runtime probe; see the
+[MXC support guidance](https://github.com/microsoft/mxc/blob/main/docs/backends/process-container/os-version-support.md)
+and M5 implementation report.

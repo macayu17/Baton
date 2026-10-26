@@ -4,7 +4,7 @@ Status: metadata slice implemented and tested locally; experimental library,
 disabled by default. Native portability and production authority gates remain open.
 
 Historical scope note: this report describes the M1 increment and database schema
-1. M5 now creates schema 15 and refuses older databases without auto-migration;
+1. M5 now creates schema 19 and refuses older databases without auto-migration;
 see `M4-IMPLEMENTATION.md` and ADR-020. The M1 test counts below are historical.
 
 The user authorized proceeding after the M0 report on 22 October 2026. M0's

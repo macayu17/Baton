@@ -72,17 +72,8 @@ pub(super) fn verify_reply(
     reply: &Reply,
 ) -> Result<(), Diagnostic> {
     match reply {
-        Reply::Run(cached)
-            if matches!(
-                &request.action,
-                Action::ObserveRun {
-                    observation: RunObservation::AdapterReported { .. }
-                        | RunObservation::AdapterGap { .. },
-                    ..
-                }
-            ) =>
-        {
-            execution::load(c, cached.binding.task_id, cached.binding.run_id)?;
+        Reply::Run(cached) if matches!(&request.action, Action::ObserveRun { .. }) => {
+            execution::verify_cached(c, request, cached)?;
         }
         Reply::Checkpoint(cached) => {
             if record(

@@ -8,6 +8,17 @@ use std::{
 };
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
+    if args.get(1).is_some_and(|mode| mode == "startup-canary") {
+        assert_eq!(args.len(), 3);
+        let mut marker = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&args[2])
+            .unwrap();
+        marker.write_all(b"started").unwrap();
+        marker.sync_all().unwrap();
+        return;
+    }
     let root = Path::new(&args[2]);
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
@@ -22,13 +33,16 @@ fn main() {
     reader.read_line(&mut request).unwrap();
     let request: Value = serde_json::from_str(&request).unwrap();
     assert_eq!(request["method"], "initialize");
-    assert_eq!(request["params"]["capabilities"]["experimentalApi"], false);
+    let mode = args[1].to_str().unwrap();
+    assert_eq!(
+        request["params"]["capabilities"]["experimentalApi"],
+        mode.starts_with("register-") && mode != "register-disabled"
+    );
     assert_eq!(
         request["params"]["capabilities"]["explicitGatewayOauth"],
         true
     );
     std::fs::write(root.join("received"), b"initialize").unwrap();
-    let mode = args[1].to_str().unwrap();
     if mode == "eof" {
         return;
     }
@@ -60,6 +74,185 @@ fn main() {
             json!({"method":"initialized","params":{}})
         );
         std::fs::write(root.join("acknowledged"), b"initialized").unwrap();
+        if mode.starts_with("register-") {
+            let mut request = String::new();
+            if reader.read_line(&mut request).unwrap() == 0 {
+                return;
+            }
+            let mut request: Value = serde_json::from_str(&request).unwrap();
+            if request["method"] == "config/read" {
+                assert_eq!(request["params"]["includeLayers"], false);
+                let requested: std::path::PathBuf =
+                    serde_json::from_value(request["params"]["cwd"].clone()).unwrap();
+                assert_eq!(
+                    std::fs::canonicalize(requested).unwrap(),
+                    std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap()
+                );
+                std::fs::write(root.join("config-received"), b"config/read").unwrap();
+                let mut response = json!({"id":request["id"],"result":{"config":{"mcp_servers":{},"hooks":{},"plugins":{},"marketplaces":{},"notify":null},"origins":{},"layers":null}});
+                let field = mode.strip_prefix("register-config-");
+                if let Some(field) = field {
+                    if field == "mcp" {
+                        response["result"]["config"]["mcp_servers"] =
+                            json!({"private-service":{"enabled":false}});
+                    } else if field == "notify" {
+                        response["result"]["config"][field] = json!(["private-service"]);
+                    } else {
+                        response["result"]["config"][field] = json!({"private-service":{}});
+                    }
+                }
+                match mode {
+                    "register-config-rejected" => {
+                        response = json!({"id":request["id"],"error":{"code":-1,"message":"private configuration rejection"}})
+                    }
+                    "register-config-wrong-id" => response["id"] = json!("unrelated"),
+                    "register-config-mixed" => response["error"] = json!(null),
+                    "register-config-malformed" => {
+                        response["result"]["config"]["mcp_servers"] = json!([])
+                    }
+                    "register-config-missing" => {
+                        response["result"].as_object_mut().unwrap().remove("config");
+                    }
+                    "register-config-hang" => {
+                        std::thread::sleep(Duration::from_secs(30));
+                        return;
+                    }
+                    _ => (),
+                }
+                println!("{response}");
+                std::io::stdout().flush().unwrap();
+                let mut next = String::new();
+                if reader.read_line(&mut next).unwrap() == 0 {
+                    return;
+                }
+                request = serde_json::from_str(&next).unwrap();
+            }
+            assert_eq!(request["method"], "thread/start");
+            assert_eq!(request["params"]["ephemeral"], true);
+            assert_eq!(request["params"]["sandbox"], "read-only");
+            assert_eq!(request["params"]["approvalPolicy"], "never");
+            assert_eq!(
+                request["params"]["dynamicTools"][0]["name"],
+                "baton_create_file_v1"
+            );
+            assert_eq!(
+                request["params"]["dynamicTools"].as_array().unwrap().len(),
+                1
+            );
+            std::fs::write(root.join("registration-received"), b"thread/start").unwrap();
+            let mut response = json!({"id":request["id"],"result":{
+                "thread":{"id":"thread-registered","ephemeral":true,"turns":[]},
+                "cwd":std::env::current_dir().unwrap(),"approvalPolicy":"never",
+                "sandbox":{"type":"readOnly","networkAccess":false},"model":"baton-fixture","modelProvider":"baton_mock"
+            }});
+            if mode == "register-wrong-id" {
+                response["id"] = json!("unrelated");
+            }
+            if mode == "register-reject" {
+                response = json!({"id":request["id"],"error":{"code":-1,"message":"private vendor rejection"}});
+            }
+            if mode == "register-unsafe" {
+                response["result"]["sandbox"]["type"] = json!("dangerFullAccess");
+            }
+            if mode == "register-hang" {
+                std::thread::sleep(Duration::from_secs(30));
+                return;
+            }
+            let announced = json!({"method":"thread/started","emittedAtMs":1,"params":{"thread":{"id":"thread-registered","preview":"private preview"}}});
+            if mode == "register-before" {
+                println!(
+                    "{}",
+                    json!({"method":"remoteControl/status/changed","emittedAtMs":1,"params":{"status":"disabled","installationId":"private-id","serverName":"private-name","environmentId":null}})
+                );
+                println!("{announced}");
+            }
+            println!("{response}");
+            if mode == "register-after" {
+                println!("{announced}");
+            }
+            if mode == "register-create" {
+                println!(
+                    "{}",
+                    json!({"method":"turn/started","params":{"threadId":"thread-registered","turn":{"id":"turn-1","status":"inProgress"}}})
+                );
+                println!(
+                    "{}",
+                    json!({"method":"item/started","params":{"threadId":"thread-registered","turnId":"turn-1","startedAtMs":1,"item":{"type":"dynamicToolCall","id":"call-1","tool":"baton_create_file_v1","status":"inProgress"}}})
+                );
+                println!(
+                    "{}",
+                    json!({"id":7,"method":"item/tool/call","params":{"threadId":"thread-registered","turnId":"turn-1","callId":"call-1","tool":"baton_create_file_v1","arguments":{"name":"created.txt","content":"must stay blocked"}}})
+                );
+            }
+            std::io::stdout().flush().unwrap();
+            let mut replay = String::new();
+            if reader.read_line(&mut replay).unwrap() > 0 {
+                std::fs::write(root.join("registration-replayed"), b"unexpected request").unwrap();
+            }
+            return;
+        }
+        if mode.starts_with("create-") {
+            println!(
+                "{}",
+                json!({"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"inProgress"}}})
+            );
+            println!(
+                "{}",
+                json!({"method":"item/started","params":{"threadId":"thread-1","turnId":"turn-1","startedAtMs":1,"item":{"type":"dynamicToolCall","id":"call-1","tool":"baton_create_file_v1","status":"inProgress"}}})
+            );
+            let callback = json!({"id":7,"method":"item/tool/call","params":{"threadId":"thread-1","turnId":"turn-1","callId":"call-1","tool":"baton_create_file_v1","arguments":{"name":"created.txt","content":"private created content"}}});
+            println!("{callback}");
+            std::io::stdout().flush().unwrap();
+            let mut response = String::new();
+            if reader.read_line(&mut response).unwrap() == 0 {
+                return;
+            }
+            let response: Value = serde_json::from_str(&response).unwrap();
+            if mode == "create-disabled" {
+                assert_eq!(
+                    response,
+                    json!({"id":7,"result":{"success":false,"contentItems":[{"type":"inputText","text":"BATON_EXECUTION_NOT_ENABLED"}]}})
+                );
+                std::fs::write(root.join("creation-refused"), b"false").unwrap();
+                return;
+            }
+            let digest = blake3::hash(b"private created content")
+                .to_hex()
+                .to_string();
+            assert_eq!(
+                response,
+                json!({"id":7,"result":{"success":true,"contentItems":[{"type":"inputText","text":format!("BLAKE3:{digest}")}]}})
+            );
+            assert_eq!(
+                std::fs::read("created.txt").unwrap(),
+                b"private created content"
+            );
+            std::fs::write(root.join("creation-acknowledged"), b"true").unwrap();
+            if mode == "create-duplicate" {
+                println!("{callback}");
+            } else if mode == "create-changed" {
+                let mut changed = callback.clone();
+                changed["params"]["arguments"]["content"] = json!("changed content");
+                println!("{changed}");
+            } else {
+                println!(
+                    "{}",
+                    json!({"method":"serverRequest/resolved","params":{"threadId":"thread-1","requestId":7}})
+                );
+                println!(
+                    "{}",
+                    json!({"method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-1","completedAtMs":2,"item":{"type":"dynamicToolCall","id":"call-1","tool":"baton_create_file_v1","status":"completed","success":true}}})
+                );
+                println!(
+                    "{}",
+                    json!({"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}})
+                );
+                if mode == "create-reuse" {
+                    println!("{callback}");
+                }
+            }
+            std::io::stdout().flush().unwrap();
+        }
         if mode.starts_with("callback-") {
             println!(
                 "{}",

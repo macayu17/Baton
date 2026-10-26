@@ -3,8 +3,9 @@ use baton_protocol::*;
 use std::{
     ffi::OsString,
     fs,
+    io::{Seek, SeekFrom},
     path::{Path, PathBuf},
-    process::{ChildStdin, ChildStdout, Command, Stdio},
+    process::{ChildStdin, ChildStdout, Command, ExitStatus, Stdio},
 };
 mod native;
 fn error(code: ErrorCode) -> Diagnostic {
@@ -13,10 +14,36 @@ fn error(code: ErrorCode) -> Diagnostic {
 /// Explicit trusted launch input. Never serialized, logged, or replayed on recovery.
 pub struct LaunchSpec {
     program: PathBuf,
+    program_file: fs::File,
+    program_hash: blake3::Hash,
     cwd: PathBuf,
     args: Vec<OsString>,
     piped: bool,
     environment: Vec<(OsString, OsString)>,
+}
+
+fn open_program(path: &Path) -> Result<fs::File, Diagnostic> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // Keep the checked executable unavailable for writes or replacement.
+        options.share_mode(0x1);
+    }
+    let file = options.open(path).map_err(|_| error(ErrorCode::Io))?;
+    if !file.metadata().map_err(|_| error(ErrorCode::Io))?.is_file() {
+        return Err(error(ErrorCode::InvalidInput));
+    }
+    Ok(file)
+}
+
+fn program_hash(mut file: &fs::File) -> Result<blake3::Hash, Diagnostic> {
+    file.seek(SeekFrom::Start(0))
+        .map_err(|_| error(ErrorCode::Io))?;
+    let mut hash = blake3::Hasher::new();
+    hash.update_reader(file).map_err(|_| error(ErrorCode::Io))?;
+    Ok(hash.finalize())
 }
 impl LaunchSpec {
     pub fn new(
@@ -40,8 +67,12 @@ impl LaunchSpec {
         {
             return Err(error(ErrorCode::InvalidInput));
         }
+        let program_file = open_program(&program)?;
+        let program_hash = program_hash(&program_file)?;
         Ok(Self {
             program,
+            program_file,
+            program_hash,
             cwd,
             args,
             piped: false,
@@ -90,10 +121,11 @@ impl LaunchSpec {
     pub fn fingerprint(&self) -> String {
         let mut hash = blake3::Hasher::new();
         if self.piped {
-            hash.update(b"baton-launch-v1-env-clear-stdio-piped");
+            hash.update(b"baton-launch-v2-env-clear-stdio-piped");
         } else {
-            hash.update(b"baton-launch-v1-env-clear-stdio-null");
+            hash.update(b"baton-launch-v2-env-clear-stdio-null");
         }
+        hash.update(self.program_hash.as_bytes());
         for field in [self.program.as_os_str(), self.cwd.as_os_str()]
             .into_iter()
             .chain(self.args.iter().map(|a| a.as_os_str()))
@@ -116,6 +148,17 @@ impl LaunchSpec {
             }
         }
         hash.finalize().to_hex().to_string()
+    }
+    fn validate_program(&self) -> Result<(), Diagnostic> {
+        // shortcut: path-based exec can race ancestor changes; require containment for runtime attestation.
+        let current =
+            open_program(&self.program).map_err(|_| error(ErrorCode::IntegrityFailure))?;
+        if crate::workspace::identity(&current)? != crate::workspace::identity(&self.program_file)?
+            || program_hash(&current)? != self.program_hash
+        {
+            return Err(error(ErrorCode::IntegrityFailure));
+        }
+        Ok(())
     }
     fn command(&self) -> Command {
         let mut command = Command::new(&self.program);
@@ -148,17 +191,20 @@ pub enum TreeStatus {
 
 pub struct ProcessTree {
     native: native::Native,
+    _program: fs::File,
     scope_id: Id,
     fingerprint: String,
     worktree: PathBuf,
 }
 impl ProcessTree {
     pub fn spawn(spec: LaunchSpec) -> Result<Self, Diagnostic> {
+        spec.validate_program()?;
         let fingerprint = spec.fingerprint();
         let worktree = spec.working_directory().to_path_buf();
         let native = native::Native::spawn(spec.command())?;
         Ok(Self {
             native,
+            _program: spec.program_file,
             scope_id: Id::new_v4(),
             fingerprint,
             worktree,
@@ -181,6 +227,10 @@ impl ProcessTree {
     }
     pub fn root_exited(&mut self) -> Result<bool, Diagnostic> {
         self.native.root_exited()
+    }
+    /// Root result only; it cannot establish descendant drain or settled effects.
+    pub fn root_exit_status(&mut self) -> Result<Option<ExitStatus>, Diagnostic> {
+        self.native.root_exit_status()
     }
     pub fn status(&mut self) -> Result<TreeStatus, Diagnostic> {
         self.native.status()

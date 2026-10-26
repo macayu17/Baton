@@ -226,7 +226,895 @@ fn adapter() -> AgentMetadata {
     }
 }
 
-// M5-D03; FR-03/06/14/15, INV-04/07/09: real pipes carry a failure only, not an execution grant.
+// M5-R03; FR-03/06/15, INV-04/07/09: registration is audited, not a model turn.
+#[tokio::test]
+async fn ephemeral_thread_registration_is_bound_and_cannot_be_replayed() {
+    for mode in ["register-good", "register-before", "register-after"] {
+        let mut f = Fixture::new();
+        let session = f.launch(mode);
+        let run = session.binding().run_id;
+        let source = Source::connect_with_file_tools(
+            session,
+            &mut f.store,
+            &f.actor,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        let operation = Id::new_v4();
+        let (mut source, mut record) = source
+            .start_file_thread(
+                &mut f.store,
+                &f.actor,
+                operation,
+                "baton-fixture",
+                "baton_mock",
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+        if mode == "register-after" {
+            let captured = source
+                .capture_next(
+                    &mut f.store,
+                    &f.actor,
+                    &adapter(),
+                    "thread-registered",
+                    Duration::from_secs(5),
+                )
+                .await
+                .unwrap();
+            source = captured.0;
+            record = captured.1;
+        }
+        if mode != "register-good" {
+            assert_eq!(
+                record.announced_thread.as_deref(),
+                Some("thread-registered")
+            );
+        }
+        assert_eq!(record.source_thread.as_deref(), Some("thread-registered"));
+        assert_eq!(record.effects.len(), 3);
+        assert_eq!(record.effects[0].state, EffectState::Completed);
+        assert_eq!(record.effects[1].state, EffectState::Completed);
+        assert_eq!(record.effects[2].class, EffectClass::Unknown);
+        assert_eq!(record.effects[2].state, EffectState::Uncertain);
+        assert!(!record.event_gap);
+        let events = f.store.execution_events(&f.actor, f.task, run).unwrap();
+        let json = serde_json::to_string(&events).unwrap();
+        assert!(
+            !json.contains("private preview")
+                && !json.contains("private-id")
+                && !json.contains("private-name")
+        );
+        assert!(events.iter().any(|event| matches!(&event.observation, RunObservation::ThreadRegistered { thread_id, .. } if thread_id=="thread-registered") && event.origin==ExecutionOrigin::AdapterObserved));
+        let error = source
+            .start_file_thread(
+                &mut f.store,
+                &f.actor,
+                operation,
+                "baton-fixture",
+                "baton_mock",
+                Duration::from_secs(5),
+            )
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.code, ErrorCode::Blocked);
+        assert!(!f.temp.path().join("registration-replayed").exists());
+        #[cfg(windows)]
+        f.assert_child_stopped().await;
+    }
+}
+
+// M5-SP02; reported executable services must be refused before thread/start.
+#[tokio::test]
+async fn startup_configuration_is_checked_before_thread_registration() {
+    for mode in [
+        "register-config-mcp",
+        "register-config-hooks",
+        "register-config-plugins",
+        "register-config-marketplaces",
+        "register-config-notify",
+    ] {
+        let mut f = Fixture::new();
+        let session = f.launch(mode);
+        let run = session.binding().run_id;
+        let source = Source::connect_with_file_tools(
+            session,
+            &mut f.store,
+            &f.actor,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        let result = source
+            .start_file_thread(
+                &mut f.store,
+                &f.actor,
+                Id::new_v4(),
+                "baton-fixture",
+                "baton_mock",
+                Duration::from_secs(5),
+            )
+            .await;
+        assert!(
+            matches!(result, Err(ref error) if error.code == ErrorCode::ExecutionNotEnabled),
+            "unsafe startup config accepted: {mode}"
+        );
+        assert!(f.temp.path().join("config-received").exists());
+        assert!(!f.temp.path().join("registration-received").exists());
+        let record = f.store.run(&f.actor, f.task, run).unwrap();
+        assert!(record.source_thread.is_none());
+        assert!(record.event_gap);
+        let events =
+            serde_json::to_string(&f.store.execution_events(&f.actor, f.task, run).unwrap())
+                .unwrap();
+        assert!(events.contains("STARTUP_CONFIG_REPORTED"));
+        assert!(!events.contains("private-service"));
+        #[cfg(windows)]
+        f.assert_child_stopped().await;
+    }
+}
+
+// M5-SP03; config response failure cannot fall through to registration.
+#[tokio::test]
+async fn startup_configuration_failures_do_not_send_registration() {
+    for (mode, expected) in [
+        ("register-config-rejected", ErrorCode::AdapterRejected),
+        ("register-config-wrong-id", ErrorCode::AdapterProtocol),
+        ("register-config-mixed", ErrorCode::AdapterProtocol),
+        ("register-config-malformed", ErrorCode::AdapterProtocol),
+        ("register-config-missing", ErrorCode::AdapterProtocol),
+        ("register-config-hang", ErrorCode::AdapterTimeout),
+    ] {
+        let mut f = Fixture::new();
+        let session = f.launch(mode);
+        let run = session.binding().run_id;
+        let source = Source::connect_with_file_tools(
+            session,
+            &mut f.store,
+            &f.actor,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        let result = source
+            .start_file_thread(
+                &mut f.store,
+                &f.actor,
+                Id::new_v4(),
+                "baton-fixture",
+                "baton_mock",
+                if mode.ends_with("hang") {
+                    Duration::from_millis(100)
+                } else {
+                    Duration::from_secs(5)
+                },
+            )
+            .await;
+        assert!(
+            matches!(result, Err(ref error) if error.code == expected),
+            "unexpected config error: {mode}"
+        );
+        assert!(f.temp.path().join("config-received").exists());
+        assert!(!f.temp.path().join("registration-received").exists());
+        let record = f.store.run(&f.actor, f.task, run).unwrap();
+        assert!(record.source_thread.is_none());
+        assert!(record.event_gap);
+        #[cfg(windows)]
+        f.assert_child_stopped().await;
+    }
+}
+
+// M5-SP04; a reply must commit before registration; cancelled inspection never replays.
+#[tokio::test]
+async fn startup_configuration_commit_failure_and_cancellation_stop_scope() {
+    for cancel in [false, true] {
+        let mut f = Fixture::new();
+        let session = f.launch(if cancel {
+            "register-config-hang"
+        } else {
+            "register-good"
+        });
+        let run = session.binding().run_id;
+        let source = Source::connect_with_file_tools(
+            session,
+            &mut f.store,
+            &f.actor,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        if cancel {
+            let read = source.start_file_thread(
+                &mut f.store,
+                &f.actor,
+                Id::new_v4(),
+                "baton-fixture",
+                "baton_mock",
+                Duration::from_secs(5),
+            );
+            assert!(tokio::time::timeout(Duration::from_millis(100), read)
+                .await
+                .is_err());
+        } else {
+            let connection =
+                rusqlite::Connection::open(f.temp.path().join("state/baton.sqlite3")).unwrap();
+            connection.execute_batch("CREATE TRIGGER refuse_config BEFORE INSERT ON execution_events WHEN json_extract(NEW.record,'$.observation.kind')='STARTUP_CONFIG_REPORTED' BEGIN SELECT RAISE(ABORT,'injected config failure'); END;").unwrap();
+            let result = source
+                .start_file_thread(
+                    &mut f.store,
+                    &f.actor,
+                    Id::new_v4(),
+                    "baton-fixture",
+                    "baton_mock",
+                    Duration::from_secs(5),
+                )
+                .await;
+            assert!(matches!(result, Err(ref error) if error.code == ErrorCode::StoreFailure));
+        }
+        assert!(!f.temp.path().join("registration-received").exists());
+        let record = f.store.run(&f.actor, f.task, run).unwrap();
+        assert!(record.source_thread.is_none());
+        assert!(record.event_gap);
+        #[cfg(windows)]
+        f.assert_child_stopped().await;
+    }
+}
+
+// M5-R04; unsupported policy, lost replies and stable initialization never grant a thread.
+#[tokio::test]
+async fn failed_thread_registration_preserves_uncertainty_and_stops_scope() {
+    for (mode, expected) in [
+        ("register-disabled", ErrorCode::ExecutionNotEnabled),
+        ("register-wrong-id", ErrorCode::AdapterProtocol),
+        ("register-reject", ErrorCode::AdapterRejected),
+        ("register-unsafe", ErrorCode::AdapterProtocol),
+        ("register-hang", ErrorCode::AdapterTimeout),
+    ] {
+        let mut f = Fixture::new();
+        let session = f.launch(mode);
+        let run = session.binding().run_id;
+        let source = if mode == "register-disabled" {
+            Source::connect(session, &mut f.store, &f.actor, Duration::from_secs(5))
+                .await
+                .unwrap()
+                .with_file_creation()
+        } else {
+            Source::connect_with_file_tools(session, &mut f.store, &f.actor, Duration::from_secs(5))
+                .await
+                .unwrap()
+        };
+        let error = source
+            .start_file_thread(
+                &mut f.store,
+                &f.actor,
+                Id::new_v4(),
+                "baton-fixture",
+                "baton_mock",
+                Duration::from_secs(5),
+            )
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.code, expected, "{mode}");
+        assert!(!error.to_string().contains("private vendor rejection"));
+        let record = f.store.run(&f.actor, f.task, run).unwrap();
+        assert!(record.source_thread.is_none());
+        if mode == "register-disabled" {
+            assert!(record.effects.is_empty());
+            assert!(!f.temp.path().join("registration-received").exists());
+        } else {
+            assert!(
+                f.temp.path().join("registration-received").exists(),
+                "{mode}"
+            );
+            assert!(
+                record
+                    .effects
+                    .iter()
+                    .any(|effect| effect.class == EffectClass::Unknown
+                        && effect.state == EffectState::Uncertain),
+                "{mode}"
+            );
+        }
+        #[cfg(windows)]
+        f.assert_child_stopped().await;
+    }
+}
+
+// M5-R04; a reply whose metadata cannot commit is not a registered thread fact.
+#[tokio::test]
+async fn thread_registration_storage_failure_keeps_unsettled_startup() {
+    let mut f = Fixture::new();
+    let session = f.launch("register-good");
+    let run = session.binding().run_id;
+    let source =
+        Source::connect_with_file_tools(session, &mut f.store, &f.actor, Duration::from_secs(5))
+            .await
+            .unwrap();
+    let connection = rusqlite::Connection::open(f.temp.path().join("state/baton.sqlite3")).unwrap();
+    connection.execute_batch("CREATE TRIGGER refuse_registration BEFORE INSERT ON execution_events WHEN json_extract(NEW.record,'$.observation.kind')='THREAD_REGISTERED' BEGIN SELECT RAISE(ABORT,'injected registration failure'); END;").unwrap();
+    assert_eq!(
+        source
+            .start_file_thread(
+                &mut f.store,
+                &f.actor,
+                Id::new_v4(),
+                "baton-fixture",
+                "baton_mock",
+                Duration::from_secs(5)
+            )
+            .await
+            .err()
+            .unwrap()
+            .code,
+        ErrorCode::StoreFailure
+    );
+    let record = f.store.run(&f.actor, f.task, run).unwrap();
+    assert!(record.source_thread.is_none());
+    assert!(record.effects.iter().any(
+        |effect| effect.class == EffectClass::Unknown && effect.state == EffectState::Uncertain
+    ));
+    assert!(f.temp.path().join("registration-received").exists());
+    #[cfg(windows)]
+    f.assert_child_stopped().await;
+}
+
+// M5-R04; retained registration is bound to its journal, not mutable run JSON.
+#[tokio::test]
+async fn corrupted_thread_registration_is_preserved_and_refused() {
+    for target in ["run", "journal"] {
+        let mut f = Fixture::new();
+        let session = f.launch("register-good");
+        let run = session.binding().run_id;
+        let source = Source::connect_with_file_tools(
+            session,
+            &mut f.store,
+            &f.actor,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        let (source, _) = source
+            .start_file_thread(
+                &mut f.store,
+                &f.actor,
+                Id::new_v4(),
+                "baton-fixture",
+                "baton_mock",
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+        let connection =
+            rusqlite::Connection::open(f.temp.path().join("state/baton.sqlite3")).unwrap();
+        if target == "run" {
+            connection.execute("UPDATE runs SET record=json_set(record,'$.source_thread','forged') WHERE id=?1", [run.to_string()]).unwrap();
+        } else {
+            assert!(connection.execute("UPDATE execution_events SET record=json_set(record,'$.observation.thread_id','forged') WHERE run_id=?1 AND json_extract(record,'$.observation.kind')='THREAD_REGISTERED'", [run.to_string()]).is_err());
+            connection
+                .execute_batch("DROP TRIGGER execution_no_update")
+                .unwrap();
+            connection.execute("UPDATE execution_events SET record=json_set(record,'$.observation.thread_id','forged') WHERE run_id=?1 AND json_extract(record,'$.observation.kind')='THREAD_REGISTERED'", [run.to_string()]).unwrap();
+        }
+        assert_eq!(
+            f.store.run(&f.actor, f.task, run).unwrap_err().code,
+            ErrorCode::CorruptStore
+        );
+        assert_eq!(
+            source
+                .stop(&mut f.store, &f.actor, Duration::from_secs(5))
+                .unwrap_err()
+                .code,
+            ErrorCode::CorruptStore
+        );
+        #[cfg(windows)]
+        f.assert_child_stopped().await;
+    }
+}
+
+// M5-SG01; FR-04/06/12/14, INV-04/09: mutable summaries cannot settle journaled effects.
+#[tokio::test]
+async fn startup_gate_refuses_corrupt_effect_summaries_and_observations() {
+    for target in ["effect", "cursor", "observation", "sequence", "reseal"] {
+        let mut f = Fixture::new();
+        let session = f.launch("register-create");
+        let run = session.binding().run_id;
+        let source = Source::connect_with_file_tools(
+            session,
+            &mut f.store,
+            &f.actor,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        let (source, _) = source
+            .start_file_thread(
+                &mut f.store,
+                &f.actor,
+                Id::new_v4(),
+                "baton-fixture",
+                "baton_mock",
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+        let connection =
+            rusqlite::Connection::open(f.temp.path().join("state/baton.sqlite3")).unwrap();
+        match target {
+            "effect" => {
+                connection.execute("UPDATE runs SET record=json_set(record,'$.effects[2].state','COMPLETED','$.effects[2].class','LOCAL_REVERSIBLE') WHERE id=?1", [run.to_string()]).unwrap();
+            }
+            "cursor" => {
+                connection
+                    .execute(
+                        "UPDATE runs SET record=json_set(record,'$.source_cursor',999) WHERE id=?1",
+                        [run.to_string()],
+                    )
+                    .unwrap();
+            }
+            "observation" => {
+                connection
+                    .execute_batch("DROP TRIGGER execution_no_update")
+                    .unwrap();
+                connection.execute("UPDATE execution_events SET record=json_set(record,'$.observation.class','LOCAL_REVERSIBLE') WHERE run_id=?1 AND json_extract(record,'$.observation.kind')='TOOL_STARTED' AND json_extract(record,'$.observation.class')='UNKNOWN'", [run.to_string()]).unwrap();
+            }
+            "sequence" => {
+                connection
+                    .execute_batch("DROP TRIGGER execution_no_update")
+                    .unwrap();
+                connection.execute("UPDATE execution_events SET record=(SELECT record FROM execution_events WHERE run_id=?1 AND sequence=1) WHERE run_id=?1 AND sequence=2", [run.to_string()]).unwrap();
+            }
+            _ => {
+                connection.execute("UPDATE runs SET record=json_set(record,'$.effects[2].state','COMPLETED','$.effects[2].class','LOCAL_REVERSIBLE') WHERE id=?1", [run.to_string()]).unwrap();
+                let json: String = connection
+                    .query_row(
+                        "SELECT record FROM runs WHERE id=?1",
+                        [run.to_string()],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                let forged: RunRecord = serde_json::from_str(&json).unwrap();
+                let hash = blake3::hash(&serde_json::to_vec(&forged).unwrap())
+                    .to_hex()
+                    .to_string();
+                connection
+                    .execute_batch("DROP TRIGGER execution_no_update")
+                    .unwrap();
+                connection.execute("UPDATE execution_events SET record=json_set(record,'$.state_hash',?1) WHERE run_id=?2 AND sequence=(SELECT max(sequence) FROM execution_events WHERE run_id=?2)", rusqlite::params![hash,run.to_string()]).unwrap();
+            }
+        }
+        assert_eq!(
+            f.store.run(&f.actor, f.task, run).unwrap_err().code,
+            ErrorCode::CorruptStore,
+            "{target}"
+        );
+        assert_eq!(
+            source
+                .capture_next(
+                    &mut f.store,
+                    &f.actor,
+                    &adapter(),
+                    "thread-registered",
+                    Duration::from_secs(5)
+                )
+                .await
+                .err()
+                .unwrap()
+                .code,
+            ErrorCode::CorruptStore
+        );
+        assert!(!f.repo.path().join("created.txt").exists());
+        #[cfg(windows)]
+        f.assert_child_stopped().await;
+    }
+}
+
+// M5-SG02; historical replies remain valid, but edited cached facts must fail closed.
+#[tokio::test]
+async fn historical_execution_reply_is_checked_against_its_recorded_state() {
+    let mut f = Fixture::new();
+    let session = f.launch("register-after");
+    let run = session.binding().run_id;
+    let source =
+        Source::connect_with_file_tools(session, &mut f.store, &f.actor, Duration::from_secs(5))
+            .await
+            .unwrap();
+    let (source, original) = source
+        .start_file_thread(
+            &mut f.store,
+            &f.actor,
+            Id::new_v4(),
+            "baton-fixture",
+            "baton_mock",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+    let event = f
+        .store
+        .execution_events(&f.actor, f.task, run)
+        .unwrap()
+        .pop()
+        .unwrap();
+    let (source, newer) = source
+        .capture_next(
+            &mut f.store,
+            &f.actor,
+            &adapter(),
+            "thread-registered",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+    assert!(newer.source_cursor > original.source_cursor);
+    let retry = Request {
+        schema_version: SchemaVersion::V0_1_0,
+        operation_id: event.operation_id,
+        actor_id: f.actor.id(),
+        expected_epoch: event.binding.epoch,
+        action: Action::ObserveRun {
+            task_id: f.task,
+            run_id: run,
+            lease_id: f.lease.lease_id,
+            observation: event.observation,
+        },
+    };
+    assert_eq!(
+        f.store.execute(&f.actor, &retry).unwrap(),
+        Reply::Run(original.clone())
+    );
+    let connection = rusqlite::Connection::open(f.temp.path().join("state/baton.sqlite3")).unwrap();
+    let mut forged = original;
+    forged.effects[2].state = EffectState::Completed;
+    forged.effects[2].class = EffectClass::LocalReversible;
+    let response =
+        serde_json::to_string(&Result::<Reply, Diagnostic>::Ok(Reply::Run(forged))).unwrap();
+    connection
+        .execute_batch("DROP TRIGGER operations_no_update")
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE operations SET result=?1 WHERE id=?2",
+            rusqlite::params![response, event.operation_id.to_string()],
+        )
+        .unwrap();
+    assert_eq!(
+        f.store.execute(&f.actor, &retry).unwrap_err().code,
+        ErrorCode::CorruptStore
+    );
+    assert_eq!(f.store.run(&f.actor, f.task, run).unwrap(), newer);
+    source
+        .stop(&mut f.store, &f.actor, Duration::from_secs(5))
+        .unwrap();
+}
+
+// M5-R04; registration does not settle unknown startup effects or admit writes.
+#[tokio::test]
+async fn registered_thread_cannot_bypass_unresolved_startup_effects() {
+    let mut f = Fixture::new();
+    let session = f.launch("register-create");
+    let run = session.binding().run_id;
+    let source =
+        Source::connect_with_file_tools(session, &mut f.store, &f.actor, Duration::from_secs(5))
+            .await
+            .unwrap();
+    let (mut source, _) = source
+        .start_file_thread(
+            &mut f.store,
+            &f.actor,
+            Id::new_v4(),
+            "baton-fixture",
+            "baton_mock",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        source = source
+            .capture_next(
+                &mut f.store,
+                &f.actor,
+                &adapter(),
+                "thread-registered",
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap()
+            .0;
+    }
+    let error = source
+        .capture_next(
+            &mut f.store,
+            &f.actor,
+            &adapter(),
+            "thread-registered",
+            Duration::from_secs(5),
+        )
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.code, ErrorCode::Blocked);
+    assert!(!f.repo.path().join("created.txt").exists());
+    assert!(f
+        .store
+        .run(&f.actor, f.task, run)
+        .unwrap()
+        .blockers()
+        .contains(&BoundaryReason::UnresolvedEffect));
+    #[cfg(windows)]
+    f.assert_child_stopped().await;
+}
+
+// M5-X03; FR-03/06/14/15, INV-04/05/07/09: host completion precedes a positive reply.
+#[tokio::test]
+async fn opted_in_callback_creates_a_file_and_records_distinct_phases() {
+    let mut f = Fixture::new();
+    let session = f.launch("create-file");
+    let run = session.binding().run_id;
+    let mut source = Source::connect(session, &mut f.store, &f.actor, Duration::from_secs(5))
+        .await
+        .unwrap()
+        .with_file_creation();
+    for _ in 0..6 {
+        let (next, record) = source
+            .capture_next(
+                &mut f.store,
+                &f.actor,
+                &adapter(),
+                "thread-1",
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+        assert!(!record.event_gap);
+        source = next;
+    }
+    assert_eq!(
+        std::fs::read(f.repo.path().join("created.txt")).unwrap(),
+        b"private created content"
+    );
+    assert!(f.temp.path().join("creation-acknowledged").exists());
+    let events = f.store.execution_events(&f.actor, f.task, run).unwrap();
+    let phases: Vec<_> = events
+        .iter()
+        .filter_map(|e| match &e.observation {
+            RunObservation::AdapterReported {
+                event:
+                    AdapterEvent {
+                        event: AdapterEventKind::DynamicToolExecution(callback),
+                        ..
+                    },
+                ..
+            } => Some((callback.phase, e.origin)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        phases,
+        vec![
+            (CallbackPhase::Planned, ExecutionOrigin::HostReported),
+            (CallbackPhase::Written, ExecutionOrigin::HostReported),
+            (CallbackPhase::Resolved, ExecutionOrigin::AdapterObserved)
+        ]
+    );
+    let record = f.store.run(&f.actor, f.task, run).unwrap();
+    assert_eq!(record.effects.len(), 1);
+    assert_eq!(record.effects[0].state, EffectState::Completed);
+    assert!(!serde_json::to_string(&events)
+        .unwrap()
+        .contains("private created content"));
+    source
+        .stop(&mut f.store, &f.actor, Duration::from_secs(5))
+        .unwrap();
+}
+
+// M5-X04; repeated or changed RPC identities never replay a completed operation.
+#[tokio::test]
+async fn file_callbacks_cannot_replay_or_rebind_an_executed_request() {
+    for mode in ["create-duplicate", "create-changed", "create-reuse"] {
+        let mut f = Fixture::new();
+        let session = f.launch(mode);
+        let run = session.binding().run_id;
+        let mut source = Source::connect(session, &mut f.store, &f.actor, Duration::from_secs(5))
+            .await
+            .unwrap()
+            .with_file_creation();
+        for _ in 0..if mode == "create-reuse" { 6 } else { 3 } {
+            source = source
+                .capture_next(
+                    &mut f.store,
+                    &f.actor,
+                    &adapter(),
+                    "thread-1",
+                    Duration::from_secs(5),
+                )
+                .await
+                .unwrap()
+                .0;
+        }
+        if mode == "create-duplicate" {
+            std::fs::remove_file(f.repo.path().join("created.txt")).unwrap();
+        }
+        let error = source
+            .capture_next(
+                &mut f.store,
+                &f.actor,
+                &adapter(),
+                "thread-1",
+                Duration::from_secs(5),
+            )
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.code, ErrorCode::IdempotencyConflict);
+        if mode == "create-duplicate" {
+            assert!(!f.repo.path().join("created.txt").exists());
+        } else {
+            assert_eq!(
+                std::fs::read(f.repo.path().join("created.txt")).unwrap(),
+                b"private created content"
+            );
+        }
+        let record = f.store.run(&f.actor, f.task, run).unwrap();
+        assert_eq!(record.effects.len(), 1);
+        assert_eq!(record.effects[0].state, EffectState::Completed);
+        assert!(record.event_gap);
+        #[cfg(windows)]
+        f.assert_child_stopped().await;
+    }
+}
+
+// M5-X05; default denial and create_new both preserve existing workspace contents.
+#[tokio::test]
+async fn file_callbacks_require_opt_in_and_preserve_existing_files() {
+    for enabled in [false, true] {
+        let mut f = Fixture::new();
+        if enabled {
+            std::fs::write(f.repo.path().join("created.txt"), b"preserve").unwrap();
+        }
+        let session = f.launch(if enabled {
+            "create-file"
+        } else {
+            "create-disabled"
+        });
+        let run = session.binding().run_id;
+        let mut source = Source::connect(session, &mut f.store, &f.actor, Duration::from_secs(5))
+            .await
+            .unwrap();
+        if enabled {
+            source = source.with_file_creation();
+        }
+        for _ in 0..2 {
+            source = source
+                .capture_next(
+                    &mut f.store,
+                    &f.actor,
+                    &adapter(),
+                    "thread-1",
+                    Duration::from_secs(5),
+                )
+                .await
+                .unwrap()
+                .0;
+        }
+        let result = source
+            .capture_next(
+                &mut f.store,
+                &f.actor,
+                &adapter(),
+                "thread-1",
+                Duration::from_secs(5),
+            )
+            .await;
+        if enabled {
+            assert_eq!(result.err().unwrap().code, ErrorCode::Io);
+            assert_eq!(
+                std::fs::read(f.repo.path().join("created.txt")).unwrap(),
+                b"preserve"
+            );
+            let record = f.store.run(&f.actor, f.task, run).unwrap();
+            assert_eq!(record.effects[0].state, EffectState::Uncertain);
+            #[cfg(windows)]
+            f.assert_child_stopped().await;
+        } else {
+            let source = result.unwrap().0;
+            assert!(!f.repo.path().join("created.txt").exists());
+            assert!(f
+                .store
+                .run(&f.actor, f.task, run)
+                .unwrap()
+                .effects
+                .is_empty());
+            source
+                .stop(&mut f.store, &f.actor, Duration::from_secs(5))
+                .unwrap();
+        }
+        assert!(!f.temp.path().join("creation-acknowledged").exists());
+    }
+}
+
+// M5-X06; loss around completion/response commits preserves only observed facts.
+#[tokio::test]
+async fn file_callback_storage_failures_preserve_effects_without_replay() {
+    for phase in ["PLANNED", "TOOL_FINISHED", "WRITTEN"] {
+        let mut f = Fixture::new();
+        let session = f.launch("create-file");
+        let run = session.binding().run_id;
+        let mut source = Source::connect(session, &mut f.store, &f.actor, Duration::from_secs(5))
+            .await
+            .unwrap()
+            .with_file_creation();
+        for _ in 0..2 {
+            source = source
+                .capture_next(
+                    &mut f.store,
+                    &f.actor,
+                    &adapter(),
+                    "thread-1",
+                    Duration::from_secs(5),
+                )
+                .await
+                .unwrap()
+                .0;
+        }
+        let connection =
+            rusqlite::Connection::open(f.temp.path().join("state/baton.sqlite3")).unwrap();
+        let condition = if phase == "TOOL_FINISHED" {
+            "json_extract(NEW.record,'$.observation.kind')='TOOL_FINISHED'".to_owned()
+        } else {
+            format!("json_extract(NEW.record,'$.observation.event.event.kind')='DYNAMIC_TOOL_EXECUTION' AND json_extract(NEW.record,'$.observation.event.event.phase')='{phase}'")
+        };
+        connection.execute_batch(&format!("CREATE TRIGGER refuse_test_phase BEFORE INSERT ON execution_events WHEN {condition} BEGIN SELECT RAISE(ABORT,'injected storage failure'); END;")).unwrap();
+        let error = source
+            .capture_next(
+                &mut f.store,
+                &f.actor,
+                &adapter(),
+                "thread-1",
+                Duration::from_secs(5),
+            )
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.code, ErrorCode::StoreFailure, "{phase}");
+        let record = f.store.run(&f.actor, f.task, run).unwrap();
+        if phase == "PLANNED" {
+            assert!(!f.repo.path().join("created.txt").exists());
+            assert!(record.effects.is_empty());
+        } else {
+            assert_eq!(
+                std::fs::read(f.repo.path().join("created.txt")).unwrap(),
+                b"private created content"
+            );
+            assert_eq!(
+                record.effects[0].state,
+                if phase == "WRITTEN" {
+                    EffectState::Completed
+                } else {
+                    EffectState::Uncertain
+                }
+            );
+        }
+        let events = f.store.execution_events(&f.actor, f.task, run).unwrap();
+        assert!(!events.iter().any(|e| matches!(
+            &e.observation,
+            RunObservation::AdapterReported {
+                event: AdapterEvent {
+                    event: AdapterEventKind::DynamicToolExecution(callback),
+                    ..
+                },
+                ..
+            } if matches!(callback.phase, CallbackPhase::Written | CallbackPhase::Resolved)
+        )));
+        #[cfg(windows)]
+        f.assert_child_stopped().await;
+    }
+}
+
+// M5-D03; FR-03/06/14/15, INV-04/07/09: real pipes carry failure, not an execution grant.
 #[tokio::test]
 async fn dynamic_callback_is_refused_without_executing_or_inventing_effects() {
     let mut f = Fixture::new();

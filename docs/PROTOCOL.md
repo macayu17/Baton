@@ -97,9 +97,9 @@ metadata result still carries continuation_quality=BLOCKED. Current local
 commands can request metadata commit behind engine-owned proof checks; process
 activation remains unavailable over local control.
 
-State schema 15 binds the stable local actor to the OS principal and journals
+State schema 19 binds the stable local actor to the OS principal and journals
 transfer intent/preflight/abort atomically with task events and retry results.
-Schema 1–14 databases are preserved and refused; no migration is implemented. A new daemon
+Schema 1–18 databases are preserved and refused; no migration is implemented. A new daemon
 under an exclusive state lock rotates only the in-memory capability; no bearer
 credential is saved. The persistent session ID locates an endpoint and does not
 prove a daemon is alive. Connection failure reports DAEMON_UNAVAILABLE; loss
@@ -377,7 +377,7 @@ requests terminate capture with gap/loss. This is partial lifecycle coverage, no
 adapter. A deterministic, run-scoped operation key deduplicates normalized facts;
 reusing that key with different facts is an audited conflict. Reopen may return
 historical metadata; it cannot adopt a process or issue execution permission.
-That increment used schema 12; current schema 15 preserves/refuses schemas 1–14.
+That increment used schema 12; current schema 19 preserves/refuses schemas 1–18.
 Envelope schema stays 0.1.0. See ADR-029–033.
 
 Schema 13 retains start/completion metadata for userMessage, agentMessage,
@@ -456,5 +456,56 @@ metadata above. See ADR-028–030.
 Adapters report capabilities: lifecycle capture, exact event outcomes, interrupt request, verified quiescence, process containment, mutation gating, native session resume, environment export. Coordinator checks required capabilities per transfer plan; lack of a capability cannot be patched with an optimistic summary. Version negotiation rejects unknown critical protocol changes. Optional session format conversion can enhance continuity but does not substitute for snapshots, lease state or evidence.
 
 ## 12. Contract tests
+
+Native launch-v2 fingerprints include main-executable bytes in addition to the
+existing path/args/transport/environment binding. Before native spawn, file identity
+and digest must match the held selection. New live descriptors do not match older
+path-only fingerprints; historical records remain evidence and cannot recreate a
+permit. Windows holds read-only sharing through native scope ownership. This
+changes no schema-19 record shape or envelope and grants no startup, dependency
+or sandbox guarantee. See ADR-039/M5-B01–04.
+
+Schema 19 adds StartupConfigReported, a cursor-bound config/read response
+fingerprint, request ID and services-present summary before thread registration.
+The trusted adapter refuses nonempty reported MCP, hook, plugin, marketplace or
+notify entries and invalid response shapes; the summary must commit before
+thread/start. It records no raw configuration and grants no authority. Omitted
+entries are not proof of isolation, and successful inspection does not settle
+Unknown startup. Legacy schemas 1–18 are preserved/refused. See ADR-038/M5-SP02–05.
+
+Schema 18 hash-binds every execution event to the task journal and records its
+post-transition RunRecord state_hash. Reads validate event binding/order and the
+current summary against the latest digest; an empty journal cannot claim a running
+process or other execution facts. Cached observed-run replies validate against
+their own historical state hash, independently of newer current state. Corrupt
+summaries, changed event facts or edited historical replies refuse with
+CORRUPT_STORE and cannot settle unknown startup or mint permission. This is local
+consistency evidence, not resource reconciliation, model-state transfer or a signed
+tamper-proof log. Legacy schemas 1–17 are preserved/refused. See ADR-037/M5-SG01–03.
+
+Schema 17 adds audited ephemeral thread registration under explicit experimental
+initialization. Fresh native admission covers the bounded pipe operation; a
+separate Unknown startup effect precedes send and remains uncertain despite a
+successful reply. Registration verifies the requested model/provider, native cwd,
+ephemeral empty history and reported restrictive policy. It does not start a turn
+or grant a source writer. source_thread and announced_thread separately retain
+the reply and thread/started facts; their journal hashes and read-time comparisons
+refuse inconsistent data. RemoteControlDisabled records only a reported disabled
+status, never OS fencing. Supported notifications validate optional emittedAtMs
+without trusting that clock for authority; raw previews/remote identities remain
+transient. Unknown frames/statuses/configuration warnings fail closed. Duplicate
+or interrupted registration never replays the RPC. See ADR-036 and M5-R01–05.
+
+Schema 16 adds DynamicToolExecution callback metadata. Explicit trusted-host
+opt-in admits only baton_create_file_v1 with strict name/content arguments;
+ordinary capture still refuses dynamic tools. Planned binds RPC ID,
+thread/turn/call and raw-frame fingerprint before any host operation. A separate
+deterministic operation ID binds the fresh native Session file permit. Host
+completion must commit before sending a digest-only success. Written records
+subsequent flush, not receipt; Resolved is vendor evidence retaining that digest.
+IDs cannot cross execution/refusal/approval, change payload or replay operations.
+Raw content is not journaled. Errors preserve files and attempt gap/loss; missing
+completion stays uncertain. No source activation or native vendor registration
+is enabled by this trusted embedding API. See ADR-035 and M5-X01–06.
 
 Test every invariant under randomized scheduling, duplicated requests, crashes at each persisted state, stale epochs, hidden child processes, interrupt mid-external action, corrupted CAS blobs and divergent worktree. A test is successful only if the system either safely resumes or accurately refuses unsafe continuation. See `TESTING.md`.

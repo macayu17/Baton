@@ -3,7 +3,7 @@
 Status: experimental process-control/effect-ledger slice implemented, disabled by
 default. Full M3 exit gate remains open; no automatic transfer is enabled.
 
-This is the historical M3 schema-3 report. M5 now uses schema 15 and adds the
+This is the historical M3 schema-3 report. M5 now uses schema 19 and adds the
 experimental local CLI/daemon and OS identity boundary; see `M4-IMPLEMENTATION.md`.
 
 The complete-project goal authorizes continued roadmap implementation. Earlier

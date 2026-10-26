@@ -47,7 +47,7 @@ Under an exclusive OS file lock, the daemon recovers a stable actor ID using its
 actual SID/effective UID and rotates a random in-memory capability. No bearer
 token is saved. Bootstrap and endpoint publication are audited with coordinator
 clock high-watermark timestamps. This increment initially used schema 4; current
-stores use schema 15 and refuse schema 1–14 without migration. Existing unbound
+stores use schema 19 and refuse schema 1–18 without migration. Existing unbound
 actors are not automatically adopted.
 
 Windows transport uses owner-only, local-only named pipes. Clients request

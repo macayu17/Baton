@@ -137,7 +137,7 @@ impl Store {
         let version: i64 = connection
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .db()?;
-        if app != APPLICATION_ID || version != 15 {
+        if app != APPLICATION_ID || version != 19 {
             return Err(error(ErrorCode::UnsupportedSchema));
         }
         configure(&connection)?;

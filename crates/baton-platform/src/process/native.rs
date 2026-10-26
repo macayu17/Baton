@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 pub(super) struct Native {
     child: Box<dyn ChildWrapper>,
-    root_exited: bool,
+    root_status: Option<ExitStatus>,
     #[cfg(windows)]
     job: Arc<win32job::Job>,
     #[cfg(unix)]
@@ -66,7 +66,7 @@ impl Native {
             .map_err(|_| error(ErrorCode::SupervisionFailure))?;
         Ok(Self {
             child,
-            root_exited: false,
+            root_status: None,
             #[cfg(windows)]
             job,
             #[cfg(unix)]
@@ -83,14 +83,17 @@ impl Native {
         }
     }
     pub(super) fn root_exited(&mut self) -> Result<bool, Diagnostic> {
-        if !self.root_exited {
-            self.root_exited = self
+        if self.root_status.is_none() {
+            self.root_status = self
                 .child
                 .try_wait()
-                .map_err(|_| error(ErrorCode::SupervisionFailure))?
-                .is_some();
+                .map_err(|_| error(ErrorCode::SupervisionFailure))?;
         }
-        Ok(self.root_exited)
+        Ok(self.root_status.is_some())
+    }
+    pub(super) fn root_exit_status(&mut self) -> Result<Option<ExitStatus>, Diagnostic> {
+        self.root_exited()?;
+        Ok(self.root_status)
     }
     pub(super) fn status(&mut self) -> Result<TreeStatus, Diagnostic> {
         #[cfg(windows)]
@@ -129,7 +132,7 @@ impl Native {
         #[cfg(unix)]
         {
             // Never signal a potentially recycled group ID after reaping its leader.
-            if !self.root_exited && !self.killed {
+            if self.root_status.is_none() && !self.killed {
                 self.child
                     .start_kill()
                     .map_err(|_| error(ErrorCode::SupervisionFailure))?;
@@ -145,7 +148,7 @@ impl Drop for Native {
     fn drop(&mut self) {
         let _ = self.terminate();
         #[cfg(unix)]
-        if !self.root_exited && self.killed {
+        if self.root_status.is_none() && self.killed {
             let _ = self.child.wait();
         }
         // Windows closes the non-inherited kill-on-close handle on ordinary drop

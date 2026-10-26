@@ -35,8 +35,45 @@ against a temporary loopback Responses fixture to inspect advertised tools under
 restricted configuration. It does not add a product HTTP service or use that
 inventory as authority. The strict candidate still exposes request_user_input;
 initially lacked callback coverage. Schema 15 adds negative callback handling;
-bounded positive permit integration remains missing. Source grants and production
-transfer remain disabled. See ADR-032/033.
+schema 16 adds an opt-in create-only callback backed by native host admission.
+Actual vendor registration/source work remains missing. Source grants and
+production transfer remain disabled. See ADR-032–035.
+
+Schema 17 adds explicit experimental initialization and audited registration of
+the fixed file tool in an ephemeral read-only thread. It does not start a turn.
+The bounded pipe operation consumes fresh native admission; a separate vendor
+startup effect stays uncertain and blocks later writes until validated policy/
+resource evidence exists. source_thread and announced_thread retain correlated
+reply/notification facts separately, with task-event hash and read-time checks.
+Native registration through Source is tested without a model request; complete
+source work and production transfer remain disabled. See ADR-036.
+
+Schema 18 adds post-transition execution state hashes. All execution observations
+are bound to task-journal hashes; reads check current run summaries against the
+latest protected digest and observed-run retry results against their historical
+digests. Empty journals permit only pending lifecycle data. The earlier thread-only
+summary comparisons are subsumed by this check. These are integrity checks, not
+resource reconciliation or source authority. See ADR-037.
+
+Schema 19 adds a config/read rejection gate inside explicit file-thread registration.
+Fresh native host admission covers its bounded pipe operation; only response
+fingerprint, request identity and a services-present summary are retained. Reported
+MCP, hook, plugin, marketplace or notify entries reject before thread/start,
+including disabled entries. No reported entries is not isolation proof; the later
+Unknown startup effect remains uncertain. See ADR-038.
+
+Native launch-v2 fingerprints also include the streamed main-executable digest.
+LaunchSpec holds the checked file; ProcessTree rechecks path identity and content
+before spawn and retains the handle. Windows excludes ordinary writes/replacement
+for that lifetime. This is a prerequisite for a version-tested startup profile,
+not dependency attestation, complete path-race protection or isolation. Database
+schema remains 19 and historical records are not upgraded. See ADR-039.
+
+The M5 native containment tracer uses an externally supplied Microsoft MXC
+executor under the existing owned native job, with a fixed benign Rust workload.
+It does not add a production SDK/backend dependency or weaken the startup block.
+Root exit status is retained separately from owned-job drain so a failed executor
+cannot masquerade as successful policy enforcement. See ADR-040/M5-NC01–04.
 
 ## 1. Architectural thesis
 
@@ -241,6 +278,14 @@ OS sandbox. Saved metadata cannot recreate permits. Late activity during
 QUIESCING is recorded and forces recovery. Unit fixtures exercise this path with
 a typed synthetic child's known local write; production transfer proofs stay closed.
 
+M5 now provides a concrete trusted-host create-only file primitive through Session.
+The launch cwd is held as a directory capability before spawn; a fresh native
+tool reservation binds operation/run/name/content. Flat names and 16 KiB content
+are bounded, existing files are preserved, and sync/readback precede observed
+completion. Errors preserve partial files and stop the managed scope; retries
+cannot reconstruct a permit. Schema 16 adds the opt-in callback below; no CLI
+command exposes it. cap-std 4.0.3 supplies relative access. See ADR-034/035.
+
 Schema 15 records callback refusal plans, written negative results and optional
 vendor resolution in the existing execution journal. Shared server-request phase
 keys prevent approvals/callbacks rebinding an RPC ID. Raw-frame fingerprints bind
@@ -249,6 +294,13 @@ scope without an answer; dynamic requests get only success:false. Dynamic item
 lifecycle is ClientToolCall metadata until a separately admitted host action exists.
 No effect, tool worker, source writer flag or positive admission is inferred. See
 ADR-033 for compatibility and native raw-protocol test limits.
+
+Schema 16 adds execution callback metadata and host opt-in for
+baton_create_file_v1. Source journals intent, invokes the Session operation,
+then sends a digest-only success after host completion commits. Written/Resolved
+remain distinct from file completion. Shared request IDs prevent rebinding or
+replay across callbacks/approvals. Default capture keeps refusing; no tool is
+registered with the real vendor and no source grant is inferred. See ADR-035.
 
 - **Daemon crash:** replay committed database state; scan staged transfers, orphan manifests, active child PIDs and outstanding effects; fail closed if uncertain.
 - **Agent crash:** preserve last checkpoint; do not claim latest in-memory events persisted; detect unknown active subprocesses.

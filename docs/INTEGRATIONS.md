@@ -10,6 +10,15 @@ Capabilities must distinguish **observation** (tool calls seen) from **control**
 
 ## 2. Codex source adapter — preferred approach
 
+Schema 17 adds explicit connect_with_file_tools and start_file_thread APIs.
+The latter admits only the fixed versioned tool in an ephemeral, empty-history
+thread with selected model/provider and reported restrictive settings. Fresh
+native admission covers host transport; a separate unknown startup effect stays
+uncertain and blocks later writes. Registration and thread/started metadata are
+separate, hash-bound facts. Actual Codex 0.164.0 registration through Source passed
+without a model request; complete startup validation, positive native tool work,
+turn launch/capture and source activation remain unproven. See ADR-036.
+
 Implemented M5 status, 25 October 2026: `baton-adapter-codex` performs a bounded
 managed initialize/initialized exchange, tested against installed Codex 0.164.0
 and synthetic peers. It retains the native task/run binding without starting a
@@ -47,12 +56,23 @@ reconciliation remain independent; this is not real-session coverage. See ADR-03
 
 The test-only source-admission tracer uses experimental dynamicTools under native
 Codex 0.164.0 against a loopback mock provider. Stable schema generation omits that
-field; --experimental includes it. Production Source has not opted into this mode.
+field; --experimental includes it. Stable Source initialization remains unchanged;
+schema 17 adds explicit opt-in registration through connect_with_file_tools.
 The observed restricted profile still advertises request_user_input alongside the
 registered Baton function. The strict Baton-only probe fails; do not treat that
 inventory as a writer capability or assume the input callback is a filesystem
-writer. Schema 15 now supplies bounded refusal handling, while positive native
-permit integration remains required. See ADR-032/033 and the M5 report.
+writer. Schema 15 supplies refusal handling; schema 16 adds the bounded opt-in
+host bridge below. Native registration now passes without a model turn; positive
+source work, startup-policy validation and complete capture remain required.
+See ADR-032–035 and the M5 report.
+
+Schema 19 adds config/read before explicit Source file-thread registration. The
+adapter journals a response fingerprint and services-present summary, rejecting
+nonempty reported mcp_servers, hooks, plugins, marketplaces or notify entries.
+Configured disabled services also reject; the adapter does not rewrite settings.
+The response must commit before thread/start. This is an additional refusal path,
+not a complete startup profile, configuration freeze or writer capability. The
+Unknown startup effect remains uncertain. See ADR-038/M5-SP02–05.
 
 The generated experimental schema uses item/tool/requestUserInput. No cancel
 answer is defined, so the adapter records an input-required refusal and stops
@@ -64,6 +84,15 @@ forwarding and stop-on-input using raw test protocol; production end-to-end sour
 capture/registration remains unproven. No real model or positive admission ran.
 
 **Primary official surface:** Codex App Server, which exposes structured thread/turn lifecycle, item events and interruption. Run app-server under Baton supervision and bind each task to its thread ID, turn ID, agent version, working directory and epoch. Support approvals without silently auto-approving operations.
+
+The schema-16 Source::with_file_creation policy explicitly admits only the
+baton_create_file_v1 dynamic recipe (strict name/content object, at most 16 KiB).
+Callback intent commits before fresh native host admission. Host completion must
+commit before a digest-only success is sent; Written/Resolved remain distinct.
+Repeated or changed request IDs cannot replay or rebind a completed operation.
+Default Source capture still refuses. Current positive tests use managed synthetic
+peers with real host files, not native Codex registration or a real model. Stable
+initialize remains unchanged and source activation stays disabled. See ADR-035.
 
 Implementation requirements:
 

@@ -8,6 +8,8 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::{ChildStdin, ChildStdout};
 
 const FRAME_LIMIT: usize = 65_536;
+#[path = "registration.rs"]
+mod registration;
 fn error(code: ErrorCode) -> Diagnostic {
     Diagnostic::new(code)
 }
@@ -25,6 +27,8 @@ pub struct Source {
     _reader: BufReader<ChildStdout>,
     _writer: ChildStdin,
     runtime: Runtime,
+    allow_file_creation: bool,
+    experimental: bool,
 }
 struct Connecting<'a> {
     session: Option<Session>,
@@ -80,6 +84,24 @@ impl Source {
         actor: &Actor,
         timeout: Duration,
     ) -> Result<Self, Diagnostic> {
+        Self::connect_policy(session, store, actor, timeout, false).await
+    }
+    /// Explicit experimental handshake for the fixed client-mediated file tool.
+    pub async fn connect_with_file_tools(
+        session: Session,
+        store: &mut Store,
+        actor: &Actor,
+        timeout: Duration,
+    ) -> Result<Self, Diagnostic> {
+        Self::connect_policy(session, store, actor, timeout, true).await
+    }
+    async fn connect_policy(
+        session: Session,
+        store: &mut Store,
+        actor: &Actor,
+        timeout: Duration,
+        experimental: bool,
+    ) -> Result<Self, Diagnostic> {
         let mut connecting = Connecting {
             session: Some(session),
             store,
@@ -108,9 +130,10 @@ impl Source {
             let mut writer = ChildStdin::from_std(stdin).map_err(|_| error(ErrorCode::Io))?;
             let mut reader =
                 BufReader::new(ChildStdout::from_std(stdout).map_err(|_| error(ErrorCode::Io))?);
-            let runtime = tokio::time::timeout(timeout, initialize(&mut reader, &mut writer))
-                .await
-                .map_err(|_| error(ErrorCode::AdapterTimeout))??;
+            let runtime =
+                tokio::time::timeout(timeout, initialize(&mut reader, &mut writer, experimental))
+                    .await
+                    .map_err(|_| error(ErrorCode::AdapterTimeout))??;
             if session.root_exited()? {
                 return Err(error(ErrorCode::AdapterProtocol));
             }
@@ -126,6 +149,8 @@ impl Source {
                 _reader: reader,
                 _writer: writer,
                 runtime,
+                allow_file_creation: experimental,
+                experimental,
             }),
             Err(error) => {
                 connecting.close()?;
@@ -135,6 +160,11 @@ impl Source {
     }
     pub fn runtime(&self) -> &Runtime {
         &self.runtime
+    }
+    /// Explicit trusted-host policy; does not activate a source or register vendor tools.
+    pub fn with_file_creation(mut self) -> Self {
+        self.allow_file_creation = true;
+        self
     }
     fn record_event(
         session: &mut Session,
@@ -185,6 +215,8 @@ impl Source {
             _reader: mut reader,
             _writer: mut writer,
             runtime,
+            allow_file_creation,
+            experimental,
         } = self;
         let mut guard = Connecting {
             session: Some(session),
@@ -204,10 +236,28 @@ impl Source {
             if binding.actor_id != actor.id() {
                 return Err(error(ErrorCode::Forbidden));
             }
+            if guard
+                .store
+                .run(actor, binding.task_id, binding.run_id)?
+                .source_thread
+                .as_ref()
+                .is_some_and(|id| id != thread)
+            {
+                return Err(error(ErrorCode::Forbidden));
+            }
             let deadline = tokio::time::Instant::now() + timeout;
             let bytes = tokio::time::timeout_at(deadline, frame(&mut reader))
                 .await
                 .map_err(|_| error(ErrorCode::AdapterTimeout))??;
+            if registration::remote_disabled(&bytes)? {
+                return registration::record_remote_disabled(session, guard.store, actor, &bytes);
+            }
+            if let Some(id) = registration::announcement(&bytes)? {
+                if id != thread {
+                    return Err(error(ErrorCode::AdapterProtocol));
+                }
+                return registration::record_announcement(session, guard.store, actor, &id, &bytes);
+            }
             match crate::wire::incoming(&bytes, adapter, thread)? {
                 crate::wire::Incoming::InterruptReply(request_id) => {
                     let operation = crate::wire::control_operation_id(
@@ -238,6 +288,87 @@ impl Source {
                 crate::wire::Incoming::Event => {
                     let event = crate::wire::normalize(&bytes, &binding, adapter, thread)?;
                     Self::record_event(session, guard.store, actor, event)
+                }
+                crate::wire::Incoming::Callback(event)
+                    if allow_file_creation
+                        && matches!(
+                            event.event,
+                            AdapterEventKind::CallbackRefusal {
+                                callback: CallbackKind::DynamicTool,
+                                ..
+                            }
+                        ) =>
+                {
+                    let recipe = crate::wire::file_creation(&bytes)?;
+                    let AdapterEventKind::CallbackRefusal {
+                        request_id,
+                        correlation_id,
+                        payload_hash,
+                        ..
+                    } = event.event
+                    else {
+                        return Err(error(ErrorCode::AdapterProtocol));
+                    };
+                    let planned_id = crate::wire::control_operation_id(
+                        &binding,
+                        adapter,
+                        thread,
+                        &request_id,
+                        5,
+                    )?;
+                    if guard
+                        .store
+                        .execution_event(actor, binding.task_id, binding.run_id, planned_id)?
+                        .is_some()
+                    {
+                        return Err(error(ErrorCode::IdempotencyConflict));
+                    }
+                    let mut planned = AdapterEvent {
+                        event: AdapterEventKind::DynamicToolExecution(Box::new(
+                            ToolExecutionCallback {
+                                request_id: request_id.clone(),
+                                correlation_id,
+                                payload_hash,
+                                phase: CallbackPhase::Planned,
+                                result_hash: None,
+                            },
+                        )),
+                        ..event
+                    };
+                    Self::record_event(session, guard.store, actor, planned.clone())?;
+                    if tokio::time::Instant::now() >= deadline {
+                        return Err(error(ErrorCode::AdapterTimeout));
+                    }
+                    let operation = crate::wire::control_operation_id(
+                        &binding,
+                        adapter,
+                        thread,
+                        &request_id,
+                        12,
+                    )?;
+                    let digest = session.create_file(
+                        guard.store,
+                        actor,
+                        operation,
+                        &recipe.name,
+                        recipe.content.as_bytes(),
+                    )?;
+                    if tokio::time::Instant::now() >= deadline {
+                        return Err(error(ErrorCode::AdapterTimeout));
+                    }
+                    let reply = crate::wire::creation_reply(&request_id, &digest)?;
+                    tokio::time::timeout_at(deadline, async {
+                        writer.write_all(&reply).await?;
+                        writer.flush().await
+                    })
+                    .await
+                    .map_err(|_| error(ErrorCode::AdapterTimeout))?
+                    .map_err(|_| error(ErrorCode::Io))?;
+                    if let AdapterEventKind::DynamicToolExecution(callback) = &mut planned.event {
+                        callback.phase = CallbackPhase::Written;
+                        callback.result_hash = Some(digest);
+                    }
+                    Self::record_event(session, guard.store, actor, planned)
                 }
                 crate::wire::Incoming::Approval(event) | crate::wire::Incoming::Callback(event) => {
                     let mut written = event.clone();
@@ -326,7 +457,32 @@ impl Source {
                     if event.adapter != *adapter || event.thread_id != thread {
                         return Err(error(ErrorCode::AdapterProtocol));
                     }
+                    if matches!(event.event, AdapterEventKind::DynamicToolExecution(_)) {
+                        let written_id = crate::wire::control_operation_id(
+                            &binding,
+                            adapter,
+                            thread,
+                            &request_id,
+                            6,
+                        )?;
+                        let written = guard
+                            .store
+                            .execution_event(actor, binding.task_id, binding.run_id, written_id)?
+                            .ok_or_else(|| error(ErrorCode::AdapterProtocol))?;
+                        let RunObservation::AdapterReported { event: saved, .. } =
+                            written.observation
+                        else {
+                            return Err(error(ErrorCode::CorruptStore));
+                        };
+                        event = saved;
+                    }
                     match &mut event.event {
+                        AdapterEventKind::DynamicToolExecution(callback)
+                            if callback.request_id == request_id
+                                && callback.phase == CallbackPhase::Written =>
+                        {
+                            callback.phase = CallbackPhase::Resolved;
+                        }
                         AdapterEventKind::ApprovalCancellationPlanned {
                             request_id: id, ..
                         } if *id == request_id => {
@@ -358,6 +514,8 @@ impl Source {
                     _reader: reader,
                     _writer: writer,
                     runtime,
+                    allow_file_creation,
+                    experimental,
                 },
                 record,
             )),
@@ -382,6 +540,8 @@ impl Source {
             _reader: reader,
             _writer: mut writer,
             runtime,
+            allow_file_creation,
+            experimental,
         } = self;
         let mut guard = Connecting {
             session: Some(session),
@@ -448,6 +608,8 @@ impl Source {
                     _reader: reader,
                     _writer: writer,
                     runtime,
+                    allow_file_creation,
+                    experimental,
                 },
                 record,
             )),
@@ -479,11 +641,23 @@ struct VendorRuntime {
     platform_os: String,
 }
 #[derive(Deserialize)]
+#[serde(untagged)]
+enum Reply {
+    Success(InitializeSuccess),
+    Failure(InitializeFailure),
+}
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Reply {
+struct InitializeSuccess {
     id: u64,
-    result: Option<VendorRuntime>,
-    error: Option<serde::de::IgnoredAny>,
+    result: VendorRuntime,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InitializeFailure {
+    id: u64,
+    #[serde(rename = "error")]
+    _error: serde::de::IgnoredAny,
 }
 
 async fn frame(reader: &mut (impl AsyncBufRead + Unpin)) -> Result<Vec<u8>, Diagnostic> {
@@ -509,30 +683,27 @@ async fn frame(reader: &mut (impl AsyncBufRead + Unpin)) -> Result<Vec<u8>, Diag
 async fn initialize<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
     reader: &mut R,
     writer: &mut W,
+    experimental: bool,
 ) -> Result<Runtime, Diagnostic> {
+    let mut request =
+        serde_json::to_vec(&serde_json::json!({"id":1,"method":"initialize","params":{
+            "clientInfo":{"name":"baton","version":"0.1.0"},
+            "capabilities":{"experimentalApi":experimental,"explicitGatewayOauth":true}
+        }}))
+        .map_err(|_| error(ErrorCode::InvalidInput))?;
+    request.push(b'\n');
     writer
-        .write_all(
-            concat!(
-                "{\"id\":1,\"method\":\"initialize\",\"params\":{",
-                "\"clientInfo\":{\"name\":\"baton\",\"version\":\"0.1.0\"},",
-                "\"capabilities\":{\"experimentalApi\":false,\"explicitGatewayOauth\":true}}}\n"
-            )
-            .as_bytes(),
-        )
+        .write_all(&request)
         .await
         .map_err(|_| error(ErrorCode::Io))?;
     writer.flush().await.map_err(|_| error(ErrorCode::Io))?;
     let reply: Reply = serde_json::from_slice(&frame(reader).await?)
         .map_err(|_| error(ErrorCode::AdapterProtocol))?;
-    if reply.id != 1 || (reply.result.is_some() && reply.error.is_some()) {
-        return Err(error(ErrorCode::AdapterProtocol));
-    }
-    if reply.error.is_some() {
-        return Err(error(ErrorCode::AdapterRejected));
-    }
-    let runtime = reply
-        .result
-        .ok_or_else(|| error(ErrorCode::AdapterProtocol))?;
+    let runtime = match reply {
+        Reply::Success(reply) if reply.id == 1 => reply.result,
+        Reply::Failure(reply) if reply.id == 1 => return Err(error(ErrorCode::AdapterRejected)),
+        _ => return Err(error(ErrorCode::AdapterProtocol)),
+    };
     if runtime.user_agent.is_empty()
         || runtime.user_agent.len() > 1024
         || runtime.codex_home.is_empty()
@@ -576,6 +747,8 @@ mod tests {
             .remove("codexHome");
         let mut both = good.clone();
         both["error"] = json!({"message":"private token"});
+        let mut mixed_null = good.clone();
+        mixed_null["error"] = json!(null);
         let mut unsupported = good.clone();
         unsupported["result"]["platformOs"] = json!("unsupported");
         let mut unknown = good.clone();
@@ -584,6 +757,8 @@ mod tests {
             wrong_id.to_string(),
             missing.to_string(),
             both.to_string(),
+            mixed_null.to_string(),
+            "{\"id\":1}".into(),
             unsupported.to_string(),
             unknown.to_string(),
             "{\"id\":1,\"id\":1,\"result\":null}".into(),
@@ -594,7 +769,9 @@ mod tests {
         ] {
             let mut reader = std::io::Cursor::new(format!("{reply}\n").into_bytes());
             let mut writer = Vec::new();
-            let error = initialize(&mut reader, &mut writer).await.unwrap_err();
+            let error = initialize(&mut reader, &mut writer, false)
+                .await
+                .unwrap_err();
             assert_eq!(error.code, ErrorCode::AdapterProtocol);
             assert!(!String::from_utf8(writer)
                 .unwrap()
@@ -607,6 +784,7 @@ mod tests {
                 b"{\"id\":1,\"error\":{\"code\":-1,\"message\":\"private token\"}}\n",
             ),
             &mut writer,
+            false,
         )
         .await
         .unwrap_err();
@@ -618,7 +796,7 @@ mod tests {
     #[tokio::test]
     async fn truncated_frames_and_eof_fail_closed() {
         for bytes in [b"".as_slice(), b"{\"id\":1}", b"\xff\n"] {
-            let error = initialize(&mut std::io::Cursor::new(bytes), &mut Vec::new())
+            let error = initialize(&mut std::io::Cursor::new(bytes), &mut Vec::new(), false)
                 .await
                 .unwrap_err();
             assert_eq!(error.code, ErrorCode::AdapterProtocol);
@@ -654,7 +832,7 @@ mod tests {
             line.clear();
             assert_eq!(reader.read_line(&mut line).await.unwrap(), 0);
         });
-        let runtime = initialize(&mut BufReader::new(read), &mut write)
+        let runtime = initialize(&mut BufReader::new(read), &mut write, false)
             .await
             .unwrap();
         assert_eq!(runtime.platform_os, "linux");

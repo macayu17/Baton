@@ -70,6 +70,20 @@ fn scoped_id(
 }
 pub(crate) fn operation_id(binding: &RunBinding, event: &AdapterEvent) -> Result<Id, Diagnostic> {
     let (item, phase) = match &event.event {
+        AdapterEventKind::DynamicToolExecution(callback) => {
+            let key = match callback.phase {
+                CallbackPhase::Planned => 5,
+                CallbackPhase::Written => 6,
+                CallbackPhase::Resolved => 7,
+            };
+            return control_operation_id(
+                binding,
+                &event.adapter,
+                &event.thread_id,
+                &callback.request_id,
+                key,
+            );
+        }
         AdapterEventKind::CallbackRefusal {
             request_id, phase, ..
         } => {
@@ -380,6 +394,53 @@ pub(crate) fn dynamic_failure(request_id: &AdapterRequestId) -> Result<Vec<u8>, 
     bytes.push(b'\n');
     Ok(bytes)
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FileCreation {
+    pub name: String,
+    pub content: String,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CreationParams {
+    thread_id: String,
+    turn_id: String,
+    call_id: String,
+    tool: String,
+    namespace: Option<String>,
+    arguments: FileCreation,
+}
+pub(crate) fn file_creation(bytes: &[u8]) -> Result<FileCreation, Diagnostic> {
+    let request: CallbackRequest<CreationParams> =
+        serde_json::from_slice(bytes).map_err(|_| invalid())?;
+    let params = request.params;
+    if request.method != "item/tool/call"
+        || !request.id.valid()
+        || params.tool != "baton_create_file_v1"
+        || params.namespace.is_some()
+        || ![&params.thread_id, &params.turn_id, &params.call_id]
+            .into_iter()
+            .all(|id| valid_adapter_id(id))
+        || params.arguments.content.len() > 16_384
+    {
+        return Err(invalid());
+    }
+    Ok(params.arguments)
+}
+pub(crate) fn creation_reply(
+    request_id: &AdapterRequestId,
+    digest: &str,
+) -> Result<Vec<u8>, Diagnostic> {
+    if !request_id.valid() || !valid_evidence_hash(digest) {
+        return Err(invalid());
+    }
+    let mut bytes = serde_json::to_vec(&serde_json::json!({"id":request_id,"result":{
+        "success":true,"contentItems":[{"type":"inputText","text":format!("BLAKE3:{digest}")}]
+    }}))
+    .map_err(|_| invalid())?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
 pub(crate) fn interrupt_id(
     binding: &RunBinding,
     adapter: &AgentMetadata,
@@ -553,6 +614,36 @@ pub(crate) fn normalize(
 }
 #[cfg(test)]
 mod tests {
+    // M5-X02; the opt-in host recipe is versioned, strict and bounded.
+    #[test]
+    fn file_creation_recipe_rejects_extra_fields_and_unsupported_tools() {
+        let good = serde_json::json!({"id":7,"method":"item/tool/call","params":{
+            "threadId":"thread-1","turnId":"turn-1","callId":"call-1",
+            "tool":"baton_create_file_v1","arguments":{"name":"new.txt","content":"private text"}
+        }});
+        let recipe = super::file_creation(&serde_json::to_vec(&good).unwrap()).unwrap();
+        assert_eq!(recipe.name, "new.txt");
+        assert_eq!(recipe.content, "private text");
+        for change in ["extra", "tool", "namespace", "large", "string"] {
+            let mut changed = good.clone();
+            match change {
+                "extra" => {
+                    changed["params"]["arguments"]["command"] = serde_json::json!("arbitrary")
+                }
+                "tool" => changed["params"]["tool"] = serde_json::json!("shell"),
+                "namespace" => changed["params"]["namespace"] = serde_json::json!("other"),
+                "large" => {
+                    changed["params"]["arguments"]["content"] =
+                        serde_json::json!("x".repeat(16_385))
+                }
+                _ => changed["params"]["arguments"] = serde_json::json!("not an object"),
+            }
+            assert!(
+                super::file_creation(&serde_json::to_vec(&changed).unwrap()).is_err(),
+                "{change}"
+            );
+        }
+    }
     use super::*;
     use serde_json::json;
     // M5-D02/U02; callback contents stay transient; no answer, permission or success is invented.

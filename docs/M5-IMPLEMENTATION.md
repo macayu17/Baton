@@ -1,8 +1,9 @@
 # M5 plan and compatibility evidence
 
-Status: experimental supervised handshake, bounded lifecycle capture and cancel-only
-approval handling and bounded turn interruption implemented,
-25 October 2026. The
+Status: experimental supervised handshake, bounded lifecycle capture, cancel-only
+approvals, bounded interruption, an opt-in create-file callback bridge and audited
+ephemeral thread registration implemented,
+26 October 2026. The
 installed Codex 0.164.0 completed a local handshake under native control. No real
 model turn, source-work capture or M5 safety gate is certified. M4's bounded
 Windows simulated gate is recorded in M4-IMPLEMENTATION.md; its missing
@@ -635,3 +636,563 @@ failure. Required user input stops instead of answering. Real model usefulness,
 native three-OS behavior, privacy/durability/performance and full M5/M6/R0 gates
 remain open. Recommend proceeding within M5; M6 is the next milestone only after
 the real source exit proof. The complete project goal remains unfinished.
+
+## Bounded host file creation (25 October 2026)
+
+This increment connects the existing fresh native ToolPermit to a concrete
+trusted-host operation, Session::create_file. It is an in-process API only;
+Codex callbacks still return failure and no CLI writer/source activation is added.
+FR-03/06/14; INV-04/05/07/09; M5-W01–06. ADR-034 records the boundary and dependency
+choice. Database schema stays 15 and the envelope stays 0.1.0.
+
+Session holds its launch cwd as a directory capability before native spawn.
+The host admits only a new flat portable ASCII filename and at most 16 KiB.
+The effect ID binds run/task/actor/epoch/lease, operation ID, sequence, filename
+and contents through a domain-separated BLAKE3 digest. Existing SQLite/native
+admission checks enforce current ownership, scope `.`, exact authorized cwd,
+native process identity, complete events and no pending transfer/uncertain effect.
+Durable reservation precedes consumption, observed start, create_new, file sync,
+bounded readback and observed success. Existing ToolStarted/Finished observations
+come from this trusted host tool implementation, not vendor-reported execution.
+
+Retries cannot obtain another permit, even if the created file has been deleted.
+They report BLOCKED; historical intent does not reconstruct a successful result.
+Changed recipes under the same operation ID conflict. Failed creation preserves
+existing/partial files, terminates the owned native scope and attempts loss
+journaling. No success is recorded for that effect; it remains uncertain. Storage
+failure may prevent final audit. There is no automatic rollback or replay.
+
+Platform code uses pinned cap-std 4.0.3 for directory-relative safe access and
+existing native identity/privacy helpers. Windows roots are held without delete
+sharing. Unix compares device/inode and refuses changed roots on revalidation.
+Checks do not isolate same-user adversarial processes, prove future bytes, or
+establish directory power-loss durability. Unix cases are written but need native
+runtime validation. Host-operation-specific hard-kill tests remain to be added.
+
+Tests: platform M5-W01–03 cover preservation, invalid paths/size, existing hardlinks,
+Windows root rename denial, and Unix symbolic links/root replacement. Supervisor
+M5-W04–06 cover audited successful creation, duplicate no-replay after deletion,
+changed recipe, stopped scope, preservation/uncertainty on an existing file,
+expiry, pending handoff and mismatched cwd. Initial supervisor RED was the missing
+create_file method. Two focused tests then passed. A broader test exposed an
+incorrect cleanup assertion: after expiry native teardown can succeed while the
+final journal refuses authority. The test now checks actual native exit without
+requiring a successful expired journal; production expiry rules were unchanged.
+
+Current worktree is based on pushed commit 17493f3; this increment and the README
+rewrite are uncommitted. On Windows GNU, `cargo +stable-x86_64-pc-windows-gnu test
+--workspace --all-features --locked` passed: **178 passed, zero failed, nine
+ignored**, exit 0. Evidence: `%TEMP%/baton-m5-host-create-tests.log`. Ignored entries
+remain the existing subprocess helpers and explicitly opt-in vendor probes; these
+probes were not rerun here. Formatting and diff whitespace checks passed.
+The default-feature workspace tests also passed (**32 passed, zero failed**),
+as did all-feature/all-target workspace Clippy with warnings denied. Default-test
+evidence: `%TEMP%/baton-m5-host-create-default-tests.log`. Native Unix runtime,
+new host-operation hard kills and real vendor source execution were not checked.
+M5 still requires controlled Codex tool registration/callback integration, complete
+source capture, real source work, interruption and independent boundary proof.
+M6 remains gated on that evidence.
+
+## Opt-in create-file callback bridge (26 October 2026)
+
+Plan (FR-03/06/14/15; INV-04/05/07/08/09; M5-X01–06): add separate execution
+callback metadata rather than relabeling a positive operation as a refusal.
+Bind typed RPC identity, scope and raw-frame fingerprint; persist intent before
+calling Session::create_file, and record a written success response separately
+from actual host completion and vendor resolution. Accept only the versioned
+baton_create_file_v1 recipe with flat name and bounded UTF-8 content. Explicit
+trusted-host opt-in is required; ordinary capture keeps refusing callbacks.
+Tests must exercise protocol provenance/predecessors, strict recipe parsing,
+managed-pipe success, duplicate/changed callbacks, preserved existing files and
+missing authority. No source activation, shell replay, real model or cloud path.
+Database version must advance for the new journal variant; legacy state stays
+preserved and refused. Verify with focused tests, workspace regression and Clippy.
+
+Implemented Source::with_file_creation as explicit trusted-host policy. Only
+baton_create_file_v1 is accepted, with a strict name/content object, no namespace,
+no extra fields and at most 16 KiB UTF-8 content. Default Source behavior retains
+failure-only replies. The existing native Session still enforces ownership,
+workspace, new-file path rules and fresh-only admission. This does not negotiate
+experimental vendor initialization or register a tool; no real model turn is added.
+
+Schema 16 adds DynamicToolExecution (boxed payload to keep enclosing request enums
+bounded) rather than relabeling execution as CallbackRefusal. Typed request ID,
+thread/turn/call and raw-frame fingerprint bind the phases. The server-request
+operation-ID domain is shared with refusals/approvals, preventing cross-method
+reuse. Raw contents are transient. Result digest is absent at Planned and required
+at Written/Resolved, with any saved written digest retained at resolution.
+Host Planned/Written and vendor Resolved have distinct provenance. Schema 1–15
+databases are preserved/refused; envelope version remains 0.1.0. See ADR-035.
+
+Order: commit callback intent, derive a separate deterministic host operation key,
+invoke Session::create_file, commit host success, send only a digest in a positive
+response, journal Written after flush, then optionally observe vendor resolution.
+Duplicate callbacks stop capture even after file deletion; no permit/reply/write
+is reconstructed. Errors preserve existing/partial files and attempt gap/loss and
+native teardown. Completion failure after actual file creation retains uncertainty.
+Written failure after committed completion retains the real completed effect and
+omits Written/receipt; it does not erase successful work or invent transport facts.
+
+Tests and evidence:
+
+| Test | Coverage |
+| --- | --- |
+| M5-X01 | Execution/refusal separation; phase/result validation; cross-method ID conflicts and provenance |
+| M5-X02 | Strict versioned tool arguments, extra field/namespace rejection and size bound |
+| M5-X03 | Managed native synthetic peer receives success only after a real host file exists; distinct phases and no raw content in journal |
+| M5-X04 | Duplicate, changed payload and post-resolution reuse stop without repeating creation or changing retained bytes |
+| M5-X05 | Default policy denies creation; opt-in preserves an existing destination and records uncertain failure |
+| M5-X06 | SQLite failures at Planned, after actual write/before ToolFinished commit, and after completion/before Written commit retain only committed facts |
+
+Initial RED tests failed on absent protocol/host-policy/parser interfaces. The first
+managed success run then rejected an incomplete synthetic item: the fixture lacked
+required lifecycle timestamps. The fixture was corrected; parser requirements were
+unchanged. Focused protocol/adapter tests passed afterward. Clippy exposed growth
+of the enclosing command enum; boxing the new execution payload resolved it without
+relaxing lint or changing the serialized journal shape. Final workspace Clippy with
+all targets/features and warnings denied passed. Full regression evidence follows.
+
+Current base remains pushed commit 17493f3; these changes and the README rewrite
+remain local/uncommitted. No credentials, private snapshots, raw sessions, cloud
+upload, arbitrary shell, UI, MCP/plugin package or production writer activation
+was added. Installed Codex was rechecked as 0.164.0; generated public schemas and
+official documentation were checked, but positive integration uses synthetic
+native peers. Actual Codex registration/positive callback, host hard-kill coverage,
+complete capture/source work, native Unix validation and the M5 safe stopped
+boundary remain open. Stay in M5; M6 follows only after its real source exit gate.
+
+Final verification: Windows 10.0.26300.0, Rust 1.98.0 GNU, Git
+2.51.0.windows.1. `cargo +stable-x86_64-pc-windows-gnu test --workspace
+--all-features --locked` passed: **184 passed, zero failed, nine ignored**, exit 0.
+Evidence: `%TEMP%/baton-m5-create-bridge-workspace.log`. The ignored entries remain
+existing helper entrypoints and explicitly opt-in vendor probes; vendor probes
+and the known failing G01 inventory experiment were not rerun here. This count
+does not turn their previous results into acceptance proof. Final workspace
+all-feature/all-target Clippy with warnings denied, formatting and diff checks
+passed. No release gate or performance result is inferred from these tests.
+The default-feature workspace suite also passed: **33 passed, zero failed**,
+exit 0; evidence `%TEMP%/baton-m5-create-bridge-default.log`. Final inspection found
+no executable under the workspace target directory still running. No service or
+global agent configuration was installed. Changes remain uncommitted.
+
+## Audited native thread registration (26 October 2026)
+
+Plan (FR-03/06/15; INV-04/05/07/09; M5-R01–05): add explicit experimental
+initialization and a single ephemeral read-only thread registering the versioned
+create-file tool. Reuse fresh native tool admission for request intent/start;
+persist the actual returned thread identity before observed completion. No model
+turn, arbitrary tool list, resume/adoption or source activation. Test protocol
+binding, strict reply validation, managed-pipe success/failures/retry and an
+explicit opt-in actual Codex registration probe with no model request. Preserve
+old databases on the necessary journal version change. Native positive tool work
+through a model-turn request remains the next step after registration is proved.
+
+Implemented explicit Source::connect_with_file_tools and start_file_thread,
+without changing default stable initialization. The thread API accepts a selected
+model/provider and registers only baton_create_file_v1, requesting ephemeral empty
+history, read-only sandbox and never approvals. The response must match model,
+provider and canonical native cwd, report network-disabled read-only policy, and
+return a valid new thread identity with empty history. These are vendor-reported
+settings, not OS sandbox attestation. No turn/start, arbitrary tool list, session
+resume, model request or source grant is added.
+
+Native admission covers the bounded host transport operation. A separate Unknown
+vendor-startup effect is recorded before send: starting a vendor thread can load
+configuration/services whose side effects have not been independently validated.
+Flush completes only the host pipe effect. A correlated reply records the observed
+thread ID and reported startup outcome, leaving startup UNCERTAIN. Subsequent host
+writes remain blocked by existing unresolved-effect checks, even when registration
+succeeds. Do not reconcile this effect using an acknowledgement, inventory, hash
+or a caller's assertion. Validated startup policy/resource evidence remains needed.
+
+Schema 17 adds source_thread and announced_thread to RunRecord and separately
+journals ThreadRegistered, ThreadAnnounced and RemoteControlDisabled. A reply is
+not a thread/started notification; either arrival order is supported. Native
+announcements and disabled remote status are hash-bound facts with validated
+optional nonnegative emittedAtMs. Remote identities, names and thread previews
+remain transient. Other remote states, configuration warnings and unknown frames
+fail closed. Journal hashes and read-time comparisons reject forged thread fields
+or altered event bodies. Duplicate requests never resend; no historical record
+recreates a native permit. Schema 1–16 state is preserved/refused without migration;
+envelope stays 0.1.0. ADR-036 records these decisions.
+
+| Test | Coverage |
+| --- | --- |
+| M5-R01 | Three protocol cases: started unknown effect required for registration; announcement/reply binding; disabled-remote metadata grants no authority |
+| M5-R02 | Two strict parser cases: IDs/mixed envelopes, cwd/model/provider/policy/history drift; startup metadata scope, time and remote-state validation |
+| M5-R03 | Managed native synthetic peers with reply-only, announcement-first and reply-first ordering; retry refusal; omission of private metadata |
+| M5-R04 | Stable initialization denial, wrong/rejected/unsafe/lost reply, failed metadata commit, corrupt run/journal fields and blocked writes after uncertain startup |
+| M5-R05 | Explicit installed Codex 0.164.0 registration through Source, native startup notifications and owned stop; no model turn |
+
+RED tests first failed on missing protocol fields/observations and experimental
+connect/thread APIs. Registration tests then passed with managed synthetic peers.
+The initial actual-vendor probe correctly refused configWarning and remote-control
+metadata. Temporary test-only shape diagnosis found an ignored tools.view_image
+configuration key and top-level emittedAtMs on native notifications. The profile
+now removes the ignored key while retaining features.view_image=false. Supported
+startup metadata is explicitly parsed and journaled; warnings are not suppressed.
+The temporary diagnostic helper was removed. A further test caught the journal's
+append-only trigger before attempted corruption; it now verifies that refusal and
+then disables the trigger only in the owned fixture to simulate offline damage.
+
+The explicitly invoked R05 probe passed with Codex 0.164.0 through the production
+Source API, using a new home, synthetic Git repository and loopback provider with
+no credentials. Evidence: `%TEMP%/baton-m5-thread-registration-native.log`. This is
+registration compatibility, not positive native tool execution, model reasoning,
+complete egress isolation, startup settlement or source safe-boundary proof.
+Full regression and additional compatibility results are recorded after execution.
+
+Final path review added a failing relative-cwd case and removed filesystem
+canonicalization of untrusted reply paths. Comparison is purely lexical against
+the recorded absolute native cwd, with equivalent local Windows disk/verbatim-disk
+prefix support. Relative, UNC and device paths are refused without filesystem or
+network resolution. The focused parser test passed after this change; final full
+regression includes it. The native provider listener is actively monitored during
+registration rather than checking only its final pending queue.
+
+Initialization review also exposed mixed result/error acceptance when error was
+null. A failing case was added to M5-C02, then initialization replies were changed
+to strict disjoint success/failure envelopes. Both stable and experimental
+initialization now reject the mixed envelope before initialized is sent. Missing
+result/error is also rejected. The focused parser test passed; the final workspace
+run includes this correction. It restores the documented contract without changing
+the envelope schema or granting new capabilities.
+
+Files: added crates/baton-adapter-codex/src/registration.rs; changed Source
+initialization/capture, protocol observations/RunRecord, store journal checks and
+schema, supervisor accessors/observation allowlist, managed/native fixtures/tests,
+and implementation/security/protocol/integration/reference/roadmap/decision docs.
+No new dependency, CLI command, frontend, MCP/plugin package, cloud upload or global
+agent configuration. Base remains 17493f3; current changes are uncommitted.
+
+Next within M5: establish validated startup policy/resource evidence, then add
+controlled turn launch and complete native source capture/positive tool work.
+Unknown startup and incomplete event/sandbox/OS evidence keep continuation BLOCKED.
+M6 still follows the real M5 source/stopped-boundary exit gate; this increment does
+not waive it or the earlier native portability/durability/performance gates.
+
+Final verification on Windows 10.0.26300.0 / Rust 1.98.0 GNU / Git
+2.51.0.windows.1, using `cargo +stable-x86_64-pc-windows-gnu` and `--locked`:
+
+- Final `test --workspace --all-features`: **194 passed, zero failed, ten ignored**,
+  exit 0. Evidence: `%TEMP%/baton-m5-thread-registration-workspace.log`. The ignored
+  entries are five explicitly invoked subprocess helpers and five opt-in native
+  vendor probes. This final run includes the path and mixed-initialize corrections.
+- Final `test --workspace`: **36 passed, zero failed**, exit 0. Evidence:
+  `%TEMP%/baton-m5-thread-registration-default.log`.
+- Final all-feature/all-target workspace Clippy with warnings denied, formatting
+  and diff whitespace checks: passed. No additional dependency was introduced.
+- Explicit installed-vendor run (`test -p baton-adapter-codex --all-features
+  --test handshake installed_codex_ -- --ignored --test-threads=1`): **four passed,
+  one failed**, exit 101. Native initialization, dynamic failure forwarding,
+  stop-on-input and the new Source registration probe passed. G01 still failed
+  with request_user_input plus baton_probe advertised instead of Baton-only tools.
+  Evidence: `%TEMP%/baton-m5-thread-registration-vendor-probes.log`. That failure
+  remains a separate unwaived compatibility gate; it is not an ordinary-suite pass.
+- Actual vendor version rechecked: Codex 0.164.0. No real model/account was used.
+  R05's listener monitored the entire registration interval and observed zero
+  provider connections. The other model-route probes use only local fixtures.
+- Final process inspection found no workspace target executable or Codex stdio
+  App Server process remaining. No service or global configuration was installed.
+  Native Unix runtime, new registration hard kills, source-work/safe-boundary proof
+  and performance were not checked. The complete project goal remains unfinished.
+
+## Execution-state integrity at the startup gate — implemented 26 October 2026
+
+Scope: FR-04/06/12/14; INV-04/07/09; M5-SG01–03. Test-first fault injection
+reproduced three paths that accepted inconsistent execution facts: changed run
+effect summaries, edited historical retry results, and a pending run claiming a
+running PID without observations. Each new test failed before the correction.
+
+Schema 18 records a required BLAKE3 post-transition RunRecord digest on every
+execution event. All execution observations, including host/supervisor facts,
+are bound to task-journal hashes. Run reads validate event binding/order and the
+latest state digest; an empty execution journal permits only pending lifecycle
+data. Cached ObserveRun replies validate against their original event, separately
+from the current summary, preserving legitimate historical retries. Mismatches
+return CORRUPT_STORE before subsequent native admission. Schemas 1–17 are preserved
+and refused without migration; envelope 0.1.0 remains unchanged. See ADR-037.
+
+| Test | Coverage | Result |
+|---|---|---|
+| M5-SG01 | Effect/cursor edits, non-adapter observation corruption, body sequence mismatch and recomputed summary digest without matching task evidence | Passed |
+| M5-SG02 | Historical retry after later events; edited cached effect summary rejected without changing current state | Passed |
+| M5-SG03 | Pending run cannot invent Running/PID facts or pass launch validation | Passed |
+
+Validation on the existing Windows GNU development host:
+
+- `cargo +stable-x86_64-pc-windows-gnu test --workspace --all-features --locked`:
+  **197 passed, zero failed, ten ignored**. Includes the workspace crash/retry
+  regression matrix. Log: `%TEMP%/baton-m5-startup-state-integrity-workspace.log`.
+- `cargo +stable-x86_64-pc-windows-gnu test --workspace --locked`: **36 passed,
+  zero failed, zero ignored**. Log: `%TEMP%/baton-m5-startup-state-integrity-default.log`.
+- Clippy with workspace/all-targets/all-features/locked and `-D warnings`, formatting
+  and diff whitespace checks: passed.
+- Explicit M5-R05 installed Codex 0.164.0 registration probe: **one passed**, exit
+  zero. It exercises Source and the changed store format without starting a model
+  turn. Log: `%TEMP%/baton-m5-startup-state-integrity-native.log`. Other ignored
+  vendor probes were not repeated; the previous strict inventory failure remains
+  unwaived.
+
+Changed boundaries: protocol ExecutionEvent; store observation, read and retry
+validation; schema/open checks; adapter and metadata fault tests; architecture,
+protocol, security, testing, roadmap and schema compatibility documentation. No
+new dependencies or vendor interfaces. Changes remain local and uncommitted.
+
+These consistency hashes are not signatures, a full historical replay verifier
+or protection from a privileged actor rewriting the whole evidence graph. They
+do not attest immutable configuration on an empty journal, settle vendor effects,
+prove sandbox isolation or certify power-loss durability. Native macOS/Linux and
+performance were not checked. Source continuation remains BLOCKED; no VERIFIED
+source boundary is claimed.
+
+Next within M5: establish a validated startup policy with resource evidence before
+native positive source work, complete capture and safe stopping. Do not reclassify
+the Unknown startup effect based on registration success or this integrity fix.
+M6 remains the next milestone after the real M5 exit gate passes.
+
+## Startup configuration tracer — implemented 26 October 2026
+
+FR-03/06/15; INV-04/06/09; M5-SP01 compares disabled/enabled local MCP
+configuration under the installed native read-only ephemeral thread profile.
+It uses only the test fixture executable, a create-new temporary marker, a private
+synthetic home/repository and the owned native supervisor. It sends no turn/start
+or model request, records an explicit raw-capture gap, stops the owned scope before
+final assertions and retains no raw vendor configuration.
+
+The native Codex 0.164.0 probe passed both comparisons. config/read exposed the
+expected enabled value before thread/start, with no canary marker at that point.
+thread/start then reported readOnly in both cases. The enabled child created its
+marker outside the worktree; the disabled child did not. No turn/start or MCP
+tool request was sent, and the loopback listener had no pending provider
+connection after owned teardown. This is not a kernel-wide egress assertion.
+
+The enabled-marker assertion failed before the canary fixture branch existed.
+Adding that bounded branch made the probe pass; the final run with config/read
+also passed (one test, zero failures, exit zero, 4.82 seconds test time). One
+earlier run timed out; the tracer now identifies the timed-out phase. This is not
+a startup reliability or performance certification.
+Evidence: `%TEMP%/baton-m5-startup-canary-red.log` and
+`%TEMP%/baton-m5-startup-canary-native.log`.
+
+Changes are confined to the native admission probe, the test fixture's create-new
+marker branch and documentation. No runtime library, database schema, execution
+policy, dependency, global Codex config or product MCP surface changed. This is
+supporting evidence for ADR-036, not a departure from its startup blocker.
+
+A positive marker proves only that this configured child ran. Absence in the
+disabled case is bounded compatibility evidence, not general confinement.
+Effective config inspection before registration is a possible rejection point,
+but config/read is vendor testimony and does not freeze configuration, constrain
+managed hooks or prove OS isolation. Next within M5: implement and test a startup
+profile that rejects inherited executable services and establish the remaining
+resource/isolation evidence before admitting positive native source work.
+Unknown startup and the M5 exit gate remain unresolved.
+
+## Reject reported executable startup configuration — implemented 26 October 2026
+
+Scope: FR-03/06/12/15; INV-04/07/09; M5-SP02–05. Before thread/start, Source now
+issues run-bound config/read for the native cwd through fresh host admission.
+Schema 19 journals request identity, response fingerprint and services-present
+summary; service names, commands, paths and values remain transient. Nonempty
+reported MCP, hook, plugin, marketplace and notify entries return
+EXECUTION_NOT_ENABLED, including disabled configurations. Omitted/null entries
+mean only that none were reported. Invalid shapes and mixed/uncorrelated replies
+return ADAPTER_PROTOCOL; vendor rejection and timeout retain their existing codes.
+The report must commit before registration. Both operations share the caller's
+I/O deadline, and failures/cancellation close the owned scope with gap/loss where
+journaling succeeds. No RPC or host permit is reconstructed from a retry.
+
+The integration test first failed because old registration accepted the configured
+service. After implementation, the three targeted integration tests passed:
+
+| Test | Evidence |
+|---|---|
+| M5-SP02 | Service entries, including disabled MCP configuration, refused before registration; names omitted from journal; strict duplicate-field parsing |
+| M5-SP03 | Rejected, wrong-ID, mixed, malformed, missing and timed-out replies cannot reach registration |
+| M5-SP04 | Failed report commit and cancelled inspection preserve the stopped/recovery scope without thread registration |
+| M5-SP05 | Installed-native Source refusal before the SP01 canary starts, for enabled and disabled entries; passed |
+
+Targeted command: `cargo +stable-x86_64-pc-windows-gnu test -p baton-adapter-codex
+--all-features --locked --test handshake startup_configuration_ -- --test-threads=1`:
+**three passed, zero failed**, exit zero. RED/green logs:
+`%TEMP%/baton-m5-startup-check-red.log` and
+`%TEMP%/baton-m5-startup-check-targeted.log`. Workspace all-target/all-feature
+Clippy with locked dependencies and `-D warnings`: passed.
+
+The fresh workspace all-feature run passed **202 tests, zero failed, 12 ignored**
+using the normal test harness scheduling, including the corrected registration
+timeout case and existing crash/concurrency matrix. Log:
+`%TEMP%/baton-m5-startup-check-workspace.log`.
+
+Explicit installed-native checks both passed under Codex 0.164.0:
+
+- SP05: **one passed**, exit zero, 9.66 seconds test time. Configured enabled and
+  disabled services both rejected through Source before any canary marker or
+  thread registration. Log: `%TEMP%/baton-m5-startup-check-native-refusal.log`.
+- R05: **one passed**, exit zero, 5.61 seconds test time. A profile without reported
+  service entries still registered the fixed file tool through Source; the startup
+  effect remained Unknown/UNCERTAIN and the owned scope stopped. No model turn.
+  Log: `%TEMP%/baton-m5-startup-check-native-registration.log`.
+
+Default-feature workspace tests passed **37 tests, zero failed, zero ignored**.
+Log: `%TEMP%/baton-m5-startup-check-default.log`. Final workspace all-target/
+all-feature Clippy with `-D warnings`, formatting and diff whitespace checks
+passed. Rust was rechecked as 1.98.0 GNU and Codex as 0.164.0. The strict inventory
+failure was not repeated or waived. Changes remain local and uncommitted.
+
+The preceding startup-canary adapter regression had 12 unit passes, then 21
+integration passes, 13 failures and six ignored tests. Most failures were native
+handshake deadlines; one returned ADAPTER_PROTOCOL instead of the expected
+IDEMPOTENCY_CONFLICT. Both that retry case and the registration case passed when
+reproduced individually before this production change. The failed run remains in
+`%TEMP%/baton-m5-startup-canary-adapter.log`; its cause is not established. No
+production deadline was increased or invariant assertion removed.
+
+The first schema-19 workspace run then passed 13 unit tests and 36 adapter
+integration tests, with one failure and seven ignored adapter tests; Cargo stopped
+before the remaining crates. The old registration-timeout test used 100 ms for
+the entire operation. With inspection now preceding registration, that budget
+could expire before any Unknown registration intent, correctly leaving none to
+assert. The test now uses the existing five-second registration budget and requires
+the fixture's registration-received marker before asserting uncertain startup.
+The independent inspection-timeout test retains 100 ms. This changes test phase
+coverage, not production deadlines or uncertainty rules. The first-run evidence
+is retained in `%TEMP%/baton-m5-startup-check-workspace-first.log`.
+
+Changed boundaries: protocol observation/validation, supervisor observation
+allowlist, store schema/open checks, adapter registration/parser, native and
+synthetic fixtures, integrity-test effect references and documentation. Schemas
+1–18 remain preserved/refused without migration; envelope stays 0.1.0. No new
+dependency, CLI launcher, user configuration rewrite or product MCP package.
+
+The separate Unknown startup effect remains uncertain even after an empty report.
+This is a rejection gate, not a validated isolation profile, configuration freeze,
+resource reconciler or source grant. See ADR-038. M5 still needs startup resource/
+isolation evidence, native positive source work, complete capture and safe stopping.
+
+## Bind the executable used by a launch — implemented 26 October 2026
+
+Scope: FR-03/12/15; INV-04/07/09; M5-B01–04. The regression test first reproduced
+different same-length bytes at the same program path producing an identical
+launch fingerprint. LaunchSpec now opens the regular program, streams its BLAKE3
+digest and includes it in the private launch-v2 fingerprint domain. Before spawn,
+ProcessTree compares the selected path's native file identity and digest with the
+held selection, then retains the file through scope ownership. The existing
+workspace file-identity helper is reused; no dependency was added.
+
+Windows uses read sharing only, denying ordinary write and delete/replacement
+access while the descriptor or native scope remains held. An existing writer
+prevents sealing. A retained drained scope still holds its executable until drop;
+updaters may need that scope released. No ACL, file contents or system configuration
+is changed by this protection. Unix has a pre-spawn observation check, not enforced
+file immutability or containment. No hidden vendor or model-state claim is added.
+
+| Test | Actual evidence |
+|---|---|
+| M5-B01 | Same-path changed bytes alter the admission fingerprint; RED observed before the fix, then passed |
+| M5-B02 | Windows writer/rename exclusion, existing-writer refusal, actual managed child drain and handle release after scope drop; passed |
+| M5-B03 | Unix observed in-place changes and same-byte path replacement refuse before spawn; test added, native execution not checked |
+| M5-B04 | A descriptor for changed bytes cannot use the earlier permit; pending intent persists and exact retry cannot issue another permit; passed |
+
+Targeted commands:
+
+- `cargo +stable-x86_64-pc-windows-gnu test -p baton-platform --features process
+  --locked --test process_io`: **five passed, zero failed, one ignored helper**.
+  The helper is explicitly invoked by the pipe/scope tests. Log:
+  `%TEMP%/baton-m5-executable-binding-platform.log`.
+- `cargo +stable-x86_64-pc-windows-gnu test -p baton-supervisor --all-features
+  --locked --test supervision changed_executable_cannot_consume_original_launch_permission
+  -- --exact`: **one passed**, exit zero. Log:
+  `%TEMP%/baton-m5-executable-binding-supervisor.log`.
+- Workspace all-target/all-feature Clippy with locked dependencies and
+  `-D warnings`: passed. RED evidence:
+  `%TEMP%/baton-m5-executable-binding-red.log`.
+- Full workspace all-feature regression with locked dependencies: **206 passed,
+  zero failed, 12 ignored**, exit zero. This includes the existing launch/transfer
+  crash matrix with the new binding. Log:
+  `%TEMP%/baton-m5-executable-binding-workspace.log`.
+- Installed Codex 0.164.0 R05 registration through Source with the checked executable
+  handle: **one passed**, exit zero, 2.17 seconds test time. No model turn; startup
+  remained uncertain and the owned scope stopped. Log:
+  `%TEMP%/baton-m5-executable-binding-native.log`.
+- Default-feature workspace tests with locked dependencies: **37 passed, zero
+  failed, zero ignored**. Log: `%TEMP%/baton-m5-executable-binding-default.log`.
+  Final formatting and diff whitespace checks passed. The interrupted validation
+  session was recovered after resume and returned exit zero; it was not restarted.
+  No workspace test executable or Cargo/linker process remained at final inspection.
+  The strict inventory failure remains unwaived; its probe was not repeated.
+
+Changed files: platform process implementation, shared identity helper visibility,
+platform pipe tests, supervisor admission tests and contract/architecture/security/
+testing/roadmap documentation. Database schema remains 19, envelope 0.1.0;
+historical records are not rewritten. New live descriptors cannot match old
+path-only fingerprints, and stored data cannot recreate a launch permit.
+
+This binds only the selected executable, not DLLs, scripts, interpreters, plugins,
+startup configuration or remote resources. Path-based exec retains race limits.
+Hashing is not a signed vendor identity, full runtime attestation or startup
+reconciliation. Native Unix behavior and performance remain unmeasured. Source
+startup remains Unknown/UNCERTAIN and production activation remains disabled.
+See ADR-039. Next within M5: establish native confinement evidence and bind a
+validated startup profile before positive source work and safe-boundary proof.
+Changes remain local and uncommitted on top of baseline 17493f3.
+
+## Native containment feasibility tracer — implemented 26 October 2026
+
+Scope: FR-03/06/12/15; INV-04/05/06/09; M5-NC01–04. The test-only tracer uses
+Microsoft MXC 1.0.1's signed native x64 executor, outside the production dependency
+graph. Its public package integrity and executable signature were verified; see
+ADR-040 for the digest. The Rust SDK source was inspected, but not built: its
+resource-compiler prerequisite is unavailable here. No Node runtime or SDK package
+is added to Baton, and no binary or downloaded archive is checked in.
+
+The version-1.0.0 policy requires base-container support, no host DACL augmentation,
+native deny-path support, no BFS helper and no warnings/errors. DACL fallback is
+explicitly false. Environment is explicit, UI remains restricted and all network
+directions including host loopback deny. The only workload is a benign Rust
+fixture with freshly owned temporary files and a local listener. Source activation
+and startup reconciliation are not part of this experiment.
+
+| Test | Actual evidence |
+|---|---|
+| M5-NC01 | Parser rejects missing, duplicated or weaker support; installed read-only probe selected base-container with no DACL mutation, BFS or warnings |
+| M5-NC02 | Native root status retains an actual exit code 7 without treating it as descendant drain |
+| M5-NC03 | Uncontained control can read/write its fixture and connect to the listener; this prevents a broken workload from passing the denial test |
+| M5-NC04 | Native contained fixture can read the allowed input; create-new, separately denied-file read and loopback connect report PermissionDenied; host bytes stay intact and no connection is accepted |
+
+The initial contained run returned a policy-validation error because explicit
+process.env omitted LOCALAPPDATA. After capturing diagnostics within the same
+owned job, the fixture supplied a private temporary path. Inherited environment
+remained disabled and no filesystem/network restriction was relaxed. New attempts
+use fresh fixture paths and container IDs, not replay of an uncertain invocation.
+
+The ordinary targeted containment tests passed **two tests, zero failed**, with
+two native opt-in cases ignored. The root-status test passed separately. Explicit
+native cases then passed **two tests, zero failed**, exit zero, 0.75 seconds test
+time. Output and waits are bounded, actual exit success is required and the owned
+job must be empty. The final variant also rejects nonempty executor diagnostics;
+both explicit native cases passed again, exit zero, 0.85 seconds test time.
+Full workspace all-feature tests passed **209 tests, zero failed, 14 ignored**;
+default-feature tests passed **37 tests, zero failed, zero ignored**. All-target,
+all-feature Clippy with `-D warnings`, formatting and diff whitespace checks passed.
+
+Logs: `%TEMP%/baton-m5-containment-control.log`,
+`%TEMP%/baton-m5-containment-exit.log`,
+`%TEMP%/baton-m5-containment-native-first.log`,
+`%TEMP%/baton-m5-containment-native-diagnostics.log` and
+`%TEMP%/baton-m5-containment-native.log`,
+`%TEMP%/baton-m5-containment-native-final.log`,
+`%TEMP%/baton-m5-containment-workspace.log` and
+`%TEMP%/baton-m5-containment-default.log`.
+
+Changed files: platform root-exit status cache/accessor; process-I/O tests; new
+containment tests and native fixture; test-only Serde/JSON/Tokio process feature
+edges in the platform manifest/lock; supporting docs. No new package version,
+database schema change, unsafe-code exception or production MXC launcher.
+
+Normal exit and an empty owned job do not prove all SDK resources cleaned up or
+surviving processes fenced after a hard crash. Native Codex inside this policy,
+private runtime writes, immutable policy binding, SDK lifecycle ownership and
+cross-platform containment remain unverified. This is the next implementation
+work within M5; production stays disabled and Unknown startup stays uncertain.

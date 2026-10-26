@@ -517,7 +517,7 @@ fn m4_transfer_expired_source_can_abort_without_renewal() {
 fn m4_previous_schemas_are_preserved_without_migration() {
     let f = Fixture::new();
     let c = rusqlite::Connection::open(f.path.join("baton.sqlite3")).unwrap();
-    for schema in [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] {
+    for schema in [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18] {
         c.pragma_update(None, "user_version", schema).unwrap();
         assert_eq!(
             Store::open(&f.path, f.clock.clone()).err().unwrap().code,
@@ -597,6 +597,54 @@ fn m4_local_and_trusted_operation_domains_are_distinct() {
     assert_eq!(
         f.store.execute_local(&f.actor, &fresh).unwrap_err().code,
         ErrorCode::Forbidden
+    );
+}
+
+// M5-SG03; FR-04/06/12, INV-07/09: a pending intent cannot invent execution facts.
+#[test]
+fn pending_run_corruption_cannot_invent_a_running_process() {
+    let mut f = Fixture::new();
+    let task = f.task();
+    let lease = f.claim(task, 0);
+    let run = Id::new_v4();
+    let request = request(
+        &f.actor,
+        1,
+        Action::OpenRun {
+            task_id: task,
+            lease_id: lease.lease_id,
+            run_id: run,
+            launch_fingerprint: "a".repeat(64),
+            capabilities: AdapterCapabilities {
+                lifecycle: false,
+                tool_outcomes: false,
+                interrupt: false,
+                mutation_gating: false,
+            },
+        },
+    );
+    let (_, permit) = f.store.prepare_launch(&f.actor, &request).unwrap();
+    assert_eq!(
+        f.store.run(&f.actor, task, run).unwrap().state,
+        RunState::LaunchPending
+    );
+    let connection = rusqlite::Connection::open(f.path.join("baton.sqlite3")).unwrap();
+    connection
+        .execute(
+            "UPDATE runs SET record=json_set(record,'$.state','RUNNING','$.pid',42) WHERE id=?1",
+            [run.to_string()],
+        )
+        .unwrap();
+    assert_eq!(
+        f.store.run(&f.actor, task, run).unwrap_err().code,
+        ErrorCode::CorruptStore
+    );
+    assert_eq!(
+        f.store
+            .validate_launch(&f.actor, &permit.unwrap())
+            .unwrap_err()
+            .code,
+        ErrorCode::CorruptStore
     );
 }
 

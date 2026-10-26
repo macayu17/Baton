@@ -89,6 +89,79 @@ transfer or activation; the full M4 gate remains open. See `M4-IMPLEMENTATION.md
 
 ## 4. Core property tests (release-blocking)
 
+M5-NC01–04 are native containment feasibility tests (FR-03/06/12/15;
+INV-04/05/06/09). Ordinary tests validate strict support parsing, retained nonzero
+root exit and an uncontained positive access control. Two explicitly ignored
+native cases require BATON_CONTAINMENT_BINARY pointing to the checked Microsoft
+MXC executor: support-only probing and a benign temporary workload with file and
+loopback denials. DACL/BFS downgrade, missing guarantees, nonzero exit, timeout,
+unexpected diagnostics and nonempty owned job refuse success. No production
+backend, Codex isolation or crash-safe SDK cleanup is certified. See ADR-040 and
+the M5 report for provenance, exact results and remaining gaps.
+
+M5-B01–04 cover executable binding for native launch admission (FR-03/12/15;
+INV-04/07/09): same-path byte changes must change fingerprints; Windows denies
+ordinary writer/replacement access while a descriptor or native scope holds its
+file, then releases on drop; Unix observed identity/content changes reject before
+spawn. A new descriptor for changed bytes cannot use an earlier launch permission
+or obtain another permit on exact retry. These do not certify dependencies,
+unmanaged pathname races, startup isolation or native Unix containment. See ADR-039
+and the M5 report for actual platform results.
+
+M5-SP02–05 cover the schema-19 pre-registration config/read rejection gate
+(FR-03/06/12/15; INV-04/07/09). Test bounded identities/hashes, duplicate fields,
+reported service entries including disabled configuration, wrong/mixed/rejected/
+missing replies, timeout, cancellation and failed report commit. Registration
+must not follow a rejected or uncommitted inspection. Protocol facts grant no
+thread or effect settlement. SP05 is opt-in native Source rejection with the same
+canary as SP01; R05 checks registration when no such services are reported.
+No test summary is authority to reconcile startup. See ADR-038 and the M5 report.
+
+M5-SP01 is an explicitly opt-in installed-Codex startup probe (FR-03/06/15,
+INV-04/06/09). Private synthetic configuration toggles one local MCP canary.
+Its test executable only creates a new temporary marker and exits; no model turn,
+MCP tool call or product MCP package is involved. Compare enabled/disabled results
+under a reported read-only ephemeral thread, with owned scope teardown and an
+explicit raw-capture gap. This probes startup scope, not enforced isolation or a
+positive source grant. See the M5 implementation report for actual results.
+
+M5-SG01–03 cover execution-state integrity at startup admission (FR-04/06/12/14,
+INV-04/07/09): changed effect class/status, forged cursor, edited non-adapter facts,
+copied event bodies with wrong sequence, recomputed local state digests, historical
+retries after newer progress, altered cached replies, and pending intents falsely
+claiming a running PID. Corrupt data is preserved/refused before another host write.
+The state hash is not resource evidence or a signing key; startup remains uncertain.
+Existing crash, concurrency and native-scope tests remain required. See ADR-037.
+
+M5-R01–05 cover schema-17 thread registration (FR-03/06/15,
+INV-04/05/07/09): valid identity and separate announcement/reply facts, strict
+model/provider/cwd/sandbox/empty-history checks, supported startup metadata,
+stable-mode denial, malformed/rejected/lost reply, duplicate refusal, metadata
+storage failure and corrupt retained/journal fields. A successful reply leaves
+vendor startup uncertain; a registered thread cannot bypass that write blocker.
+R05 is an explicitly opt-in actual Codex probe through Source with private home,
+synthetic repo and loopback provider: no turn, no provider connection or user data.
+These prove registration compatibility, not full startup isolation, source work,
+hard-kill coverage or a safe transfer boundary. See ADR-036 and the M5 report.
+
+M5-X01–06 cover schema-16 opt-in file creation callbacks (FR-03/06/14/15,
+INV-04/05/07/08/09): typed identity/payload/result/provenance and cross-method
+conflicts; strict bounded recipe parsing; managed native pipes with real host
+creation before positive reply; duplicate, changed and resolved reuse; default
+denial and preservation of existing files; injected failures before callback
+intent, after actual write/before completion commit, and after completion/before
+Written commit. Raw content stays out of the journal. These are synthetic peers,
+not native Codex registration/model-work or source activation proof. Operation
+hard kills and native Unix execution remain open. See ADR-035 and the M5 report.
+
+M5-W01–06 cover bounded create-only filesystem access and its native host permit
+integration (FR-03/06/14, INV-04/05/06/07/09): unsafe names/size, no overwrite,
+hardlinks, held Windows root, Unix replacement/symlink cases, recorded completion,
+no replay after deletion, changed-recipe conflict, stop on uncertain failure,
+expired lease, pending transfer and wrong workspace. Unix-only cases require
+native Unix execution. These tests do not connect real Codex callbacks, certify
+source activation or cover hard kills inside this new host operation. See ADR-034.
+
 M5-D01–06/U01–04 cover schema-15 negative callbacks (FR-03/06/12/14/15,
 INV-04/07/08/09): protocol phase/provenance/payload binding and cross-method ID
 conflicts; scoped parser and omission of raw text; managed native peers receiving

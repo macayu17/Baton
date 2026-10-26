@@ -7,11 +7,12 @@ publish.workspace = true
 [features]
 default = []
 ipc = ["dep:interprocess", "dep:tokio", "dep:widestring"]
-process = ["dep:process-wrap", "dep:blake3", "dep:win32job", "dep:windows"]
+process = ["dep:process-wrap", "dep:blake3", "dep:win32job", "dep:windows", "dep:cap-std"]
 
 [dependencies]
 baton-protocol = { path = "../baton-protocol" }
 blake3 = { workspace = true, optional = true }
+cap-std = { version = "=4.0.3", optional = true }
 process-wrap = { version = "=10.0.1", default-features = false, features = ["std", "job-object", "creation-flags", "process-group"], optional = true }
 interprocess = { version = "=2.4.6", features = ["tokio"], optional = true }
 tokio = { workspace = true, optional = true }
@@ -28,7 +29,14 @@ rustix = { version = "1", features = ["process"] }
 
 [dev-dependencies]
 tempfile.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["process"] }
+serde.workspace = true
+serde_json.workspace = true
+
+[[bin]]
+name = "baton-containment-fixture"
+path = "tests/support/containment_fixture.rs"
+required-features = ["process"]
 
 [[test]]
 name = "ipc"

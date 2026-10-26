@@ -55,8 +55,18 @@ impl AdapterRequestId {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolExecutionCallback {
+    pub request_id: AdapterRequestId,
+    pub correlation_id: String,
+    pub payload_hash: String,
+    pub phase: CallbackPhase,
+    pub result_hash: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
 pub enum AdapterEventKind {
+    DynamicToolExecution(Box<ToolExecutionCallback>),
     CallbackRefusal {
         request_id: AdapterRequestId,
         correlation_id: String,
@@ -120,6 +130,13 @@ pub struct AdapterEvent {
     pub event: AdapterEventKind,
 }
 impl AdapterEventKind {
+    fn server_request(&self) -> Option<&AdapterRequestId> {
+        match self {
+            Self::DynamicToolExecution(callback) => Some(&callback.request_id),
+            Self::CallbackRefusal { request_id, .. } => Some(request_id),
+            _ => self.approval(),
+        }
+    }
     fn interrupt(&self) -> Option<&AdapterRequestId> {
         match self {
             Self::TurnInterruptPlanned { request_id }
@@ -188,6 +205,27 @@ pub fn valid_adapter_id(value: &str) -> bool {
 }
 impl AdapterEvent {
     pub fn validate(&self) -> Result<(), Diagnostic> {
+        if let AdapterEventKind::DynamicToolExecution(callback) = &self.event {
+            let ToolExecutionCallback {
+                request_id,
+                correlation_id,
+                payload_hash,
+                phase,
+                result_hash,
+            } = callback.as_ref();
+            if !request_id.valid()
+                || !valid_adapter_id(correlation_id)
+                || !valid_evidence_hash(payload_hash)
+                || match phase {
+                    CallbackPhase::Planned => result_hash.is_some(),
+                    _ => result_hash
+                        .as_ref()
+                        .is_none_or(|hash| !valid_evidence_hash(hash)),
+                }
+            {
+                return Err(Diagnostic::new(ErrorCode::InvalidInput));
+            }
+        }
         if let AdapterEventKind::CallbackRefusal {
             request_id,
             correlation_id,
@@ -281,6 +319,57 @@ impl AdapterEvent {
             }
         }
         let mut gap = active != Some(self.turn_id.as_str());
+        for old in history {
+            if self.event.server_request().is_some()
+                && self.event.server_request() == old.event.server_request()
+                && matches!(self.event, AdapterEventKind::DynamicToolExecution(_))
+                    != matches!(old.event, AdapterEventKind::DynamicToolExecution(_))
+            {
+                return Err(invalid());
+            }
+        }
+        if let AdapterEventKind::DynamicToolExecution(callback) = &self.event {
+            let ToolExecutionCallback {
+                request_id,
+                correlation_id,
+                payload_hash,
+                phase,
+                result_hash,
+            } = callback.as_ref();
+            let mut planned = false;
+            let mut written = false;
+            for old in history {
+                if let AdapterEventKind::DynamicToolExecution(old_callback) = &old.event {
+                    let ToolExecutionCallback {
+                        request_id: id,
+                        correlation_id: old_id,
+                        payload_hash: old_hash,
+                        phase: old_phase,
+                        result_hash: old_result,
+                    } = old_callback.as_ref();
+                    if id != request_id {
+                        continue;
+                    }
+                    if old.turn_id != self.turn_id
+                        || old_id != correlation_id
+                        || old_hash != payload_hash
+                        || old_phase == phase
+                        || *old_phase == CallbackPhase::Resolved
+                        || (old_result.is_some() && old_result != result_hash)
+                    {
+                        return Err(invalid());
+                    }
+                    planned |= *old_phase == CallbackPhase::Planned;
+                    written |= *old_phase == CallbackPhase::Written;
+                }
+            }
+            if *phase != CallbackPhase::Planned && !planned {
+                return Err(invalid());
+            }
+            if *phase == CallbackPhase::Resolved {
+                gap = !written;
+            }
+        }
         if let AdapterEventKind::CallbackRefusal {
             request_id,
             correlation_id,

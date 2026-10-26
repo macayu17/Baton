@@ -57,7 +57,7 @@ impl Store {
         let schema: i64 = c
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .db()?;
-        if app != APPLICATION_ID || schema != 15 {
+        if app != APPLICATION_ID || schema != 19 {
             return Err(error(ErrorCode::UnsupportedSchema));
         }
         let (subject, session): (String, String) = c

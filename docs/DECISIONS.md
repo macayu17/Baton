@@ -774,3 +774,247 @@ This document records product/engineering **proposals accepted as the implementa
   or actual model work. The strict Baton-only inventory experiment is still a
   separate known failure. Bounded positive tool admission, real source work and
   independent source boundary proof remain open. See M5-IMPLEMENTATION.md.
+
+## ADR-034 — Bind bounded host creation to live native admission
+
+- **Date/status:** 25 October 2026; experimental M5 increment, not source activation.
+- **Decision:** add a rooted directory capability in baton-platform and a trusted
+  Session create-only file operation. Pin the launch cwd before spawn. Use the
+  existing fresh ToolPermit and SQLite execution journal; add no IPC command,
+  generic shell endpoint or persisted replay recipe. The content/name/run binding
+  participates in a domain-separated BLAKE3-derived effect ID, so changed requests
+  cannot reuse a reservation. Existing schema 15 and envelope 0.1.0 remain unchanged.
+- **Boundary:** flat portable ASCII filenames only, at most 16 KiB, create_new,
+  file sync and bounded byte readback. Existing files, links and directories are
+  preserved. Directory identity and ownership are checked around the operation.
+  Windows directory handles deny rename/deletion while held; cap-std performs
+  directory-relative access. Source activation and dynamic callbacks stay disabled.
+- **Auditing:** reservation commits before consuming native admission, followed
+  by ToolStarted, actual creation/readback and ToolFinished success. These are
+  observations from the trusted host tool implementation, not vendor testimony.
+  An error after reservation stops the owned scope and attempts SupervisorLost;
+  unfinished effects stay uncertain. Partial files are preserved. Storage failure
+  can prevent final audit; neither a failure nor historical intent authorizes replay.
+- **Retries:** exact reservation retries return no fresh permit and the host
+  operation reports BLOCKED. It does not reconstruct a successful file result.
+  Query recorded events/current files for reconciliation. Changed recipe inputs
+  conflict. No rollback, overwrite or automatic deletion is attempted.
+- **Dependency/limits:** pin cap-std 4.0.3 behind the existing process feature to
+  avoid implementing unsafe OS-relative filesystem calls in workspace Rust.
+  This adds transitive platform dependencies. It is not an OS sandbox, protection
+  against same-user malware, a power-loss directory-durability guarantee, or proof
+  of future file integrity. Unix root-replacement/symlink cases require native CI.
+  New host-operation hard-kill boundaries and the actual Codex bridge remain open.
+  FR-03/06/14; INV-04/05/07/09; M5-W01–06. See M5-IMPLEMENTATION.md.
+
+## ADR-035 — Opt-in create-file callback with separate execution evidence
+
+- **Date/status:** 26 October 2026; accepted experimental M5 increment.
+- **Decision:** Source::with_file_creation is explicit trusted-host policy for
+  baton_create_file_v1 callbacks only. Ordinary Source capture retains negative
+  responses. Strict arguments contain name and UTF-8 content (at most 16 KiB);
+  unknown tools, namespaces and extra recipe fields fail closed. Session validates
+  paths, native scope/authority and create-only semantics. No arbitrary command,
+  overwrite, CLI switch or source grant is added.
+- **Journal:** schema 16 adds DynamicToolExecution with typed request identity,
+  thread/turn/call binding, raw-frame fingerprint, Planned/Written/Resolved phases
+  and result digest. Planned/Written are HostReported; Resolved is AdapterObserved.
+  Execution/refusal share the server-request operation-ID domain with approvals.
+  An ID cannot switch methods, payload or turn. Result digest is absent at Planned,
+  required at Written/Resolved, and must agree with recorded written evidence.
+  Raw contents remain transient. Envelope stays 0.1.0; schema 1–15 state is
+  preserved/refused without migration.
+- **Order:** commit callback intent, derive a separate run/request-bound host
+  operation, consume fresh native admission, commit host completion, send a success
+  containing only the file BLAKE3 digest, then journal Written. Vendor resolution
+  is separate. Duplicate callbacks stop capture without recreating a permit,
+  resending success or recreating deleted content.
+- **Failure:** malformed requests, missing authority, existing destinations, lost
+  transport and storage errors stop the owned scope and attempt gap/loss journaling.
+  Preserve files. Missing completion after an actual write leaves uncertainty;
+  missing response journal after committed completion retains that completion
+  without inventing Written/receipt evidence. Neither proves future integrity or
+  a production safe boundary. Deadlines bound I/O waits, not synchronous disk I/O.
+- **Compatibility/evidence:** installed Codex remains 0.164.0. Generated public
+  experimental schemas and official callback documentation were checked. Production
+  initialize still uses experimentalApi=false and registers no tools. M5-X01–06
+  use synthetic native peers, real pipes/host files, strict parsing, duplicate/
+  changed/resolved reuse, default denial and three storage failures. No real model,
+  native positive Codex registration, source activation or shell bridge is tested.
+  Complete capture, operation hard kills and native Unix/release gates remain open.
+  No dependency change beyond ADR-034. See M5-IMPLEMENTATION.md.
+
+## ADR-036 — Audited ephemeral thread registration without startup-effect settlement
+
+- **Date/status:** 26 October 2026; accepted experimental M5 increment.
+- **Decision:** keep Source::connect stable by default. Explicit
+  connect_with_file_tools opts into experimental initialization. start_file_thread
+  registers only baton_create_file_v1 in a new ephemeral thread, with a selected
+  model/provider, never approvals and reported read-only/network-disabled sandbox.
+  The reply must match those settings, the native cwd, a valid thread identity and
+  empty history. No turn, resume/adoption, arbitrary tool list or source grant.
+  Compare cwd lexically against the recorded absolute native cwd; accept only
+  equivalent local Windows disk/verbatim-disk prefixes. Relative/UNC/device reply
+  paths cannot trigger filesystem resolution or network access.
+- **Authority/effects:** consume fresh native admission for the bounded host pipe
+  operation; bind its intent to the complete request/run/epoch/operation identity.
+  Record a separate Unknown vendor-startup effect before send. Pipe flush can
+  complete the transport effect; a correlated successful reply only records
+  registration metadata and reported startup outcome. Startup remains UNCERTAIN:
+  the generic launcher has not proved that configuration/plugin/MCP startup is
+  free of external effects. Existing unresolved-effect checks block subsequent
+  host writes. No hash, reply or metadata flag reconciles that uncertainty.
+- **Journal:** schema 17 adds source_thread and announced_thread to RunRecord and
+  ThreadRegistered, ThreadAnnounced and RemoteControlDisabled observations.
+  Registration acknowledgement and thread/started remain separate vendor facts
+  in either arrival order. Task-event hashes bind all three observations; reads
+  compare retained thread fields with their journal and reject corruption. One
+  thread per run; retries never resend the request or reconstruct a permit.
+  Schemas 1–16 are preserved/refused without migration. Envelope stays 0.1.0.
+- **Metadata/privacy:** validate optional nonnegative emittedAtMs on supported
+  startup notifications; retain hashes instead of previews, installation IDs or
+  server names. Only remote-control status disabled is supported. Other statuses,
+  configuration warnings and unknown frames fail closed. A reported disabled
+  status is not OS isolation, proof of future state or write authority.
+- **Compatibility:** actual Codex 0.164.0 emits startup notification metadata not
+  covered by the previous narrow parser. Its generated schemas and official
+  documentation were checked. The test profile dropped ignored tools.view_image
+  while retaining features.view_image=false; no safety setting was silently
+  weakened. Temporary reply-shape diagnostics were removed after diagnosis.
+- **Evidence/limits:** M5-R01–05 test protocol, strict reply/notification parsing,
+  real managed synthetic peers, refusal/retry/storage/corruption and blocked writes
+  after registration. An explicit installed-vendor probe passed through Source
+  without a turn or connection to its loopback model-provider listener. It proves
+  registration compatibility, not complete egress isolation or source-work safety.
+  Validated startup policy, actual native positive tool work, complete capture,
+  hard-kill boundaries, native Unix and release gates remain open. No dependency,
+  frontend, hosted service, MCP/plugin package or cloud upload is added.
+
+## ADR-037 — Bind execution summaries and historical replies to journaled state hashes
+
+- **Date/status:** 26 October 2026; accepted experimental M5 integrity correction.
+- **Finding:** valid-JSON edits to mutable run effects/cursors were not fully
+  checked against execution evidence. A completed-looking summary could hide the
+  unknown startup blocker. Cached non-adapter execution replies and pending runs
+  also accepted inconsistent execution facts. Failing tests reproduced these gaps.
+- **Decision:** schema 18 adds required ExecutionEvent.state_hash: BLAKE3 of the
+  canonical serialized RunRecord after that transition. Every execution event,
+  including host/supervisor tool facts, is hash-bound to its task-journal entry.
+  Run reads verify event binding/order and compare the current summary with the
+  latest recorded state hash. Empty execution journals permit only pending
+  lifecycle data, not invented process/activity facts. This replaces the narrower
+  per-thread summary comparisons; it is not a full historical state replay engine.
+- **Retries:** cached ObserveRun replies must match the original operation's
+  binding and recorded state hash, while the current run must validate separately.
+  Historical data is compared with its own event, so later legitimate progress
+  does not invalidate an exact retry. No cached data reconstructs a permit or
+  authorizes replay. Raw evidence_hash retains its separate meaning.
+- **Failure/trust:** mismatches return CORRUPT_STORE, preserve data and deny new
+  host admission. Owned native teardown still occurs if journaling is unavailable.
+  Hashes detect inconsistent summaries and partial journal/cache edits; they are
+  not signatures or protection against a privileged actor rewriting all evidence.
+  Resource settlement, OS fencing and vendor testimony remain separate concerns.
+- **Compatibility:** database schemas 1–17 are preserved/refused without migration;
+  request envelope remains 0.1.0. No new dependency, external interface, tool grant,
+  model request, uploader, shell endpoint or service is added.
+- **Validation:** M5-SG01–03 cover effect/cursor/observation/order corruption,
+  attempted local recomputation of the state digest, historical retry/cache edits,
+  and pending-state process fabrication. The existing workspace crash/retry matrix
+  remains required. Startup effects are still uncertain; validated launch policy,
+  source work and the M5 exit gate remain open. See M5-IMPLEMENTATION.md.
+
+## ADR-038 — Reject reported startup services before thread registration
+
+- **Date/status:** 26 October 2026; accepted experimental M5 rejection gate.
+- **Evidence:** M5-SP01 under installed Codex 0.164.0 started a configured MCP
+  child outside the synthetic worktree while the thread reported readOnly, before
+  any model turn. config/read exposed the entry before thread/start. Thread
+  policy metadata cannot establish process-startup confinement.
+- **Decision:** start_file_thread first issues config/read for the bound native
+  cwd, using fresh host admission and a request ID derived from run/operation
+  identity. Request intent precedes the pipe write; bounded write/flush and reply
+  parsing share the registration deadline. Missing, malformed, mixed, rejected or
+  uncorrelated replies close the owned scope. Only the supported disabled-remote
+  notification may interleave with inspection.
+- **Rejection scope:** refuse any nonempty reported mcp_servers, hooks, plugins,
+  marketplaces or notify entry, including configured disabled services. Invalid
+  shapes refuse. Omitted/null entries mean only that none were reported; unknown
+  config fields are not certified. No generic configuration writer, cleanup,
+  hook bypass or automatic policy repair is introduced.
+- **Audit/privacy:** schema 19 adds StartupConfigReported with bounded request ID,
+  reply fingerprint and services-present summary. It advances the observed cursor
+  without granting a thread, capabilities, settled effects or native quiescence.
+  Config names, commands, paths and values are not copied into the journal.
+  Reporting must commit before thread/start; no cached result recreates a permit.
+  Schemas 1–18 are preserved/refused without migration; envelope stays 0.1.0.
+- **Limits:** this is an additional rejection gate, not a complete startup profile
+  or OS sandbox. config/read is vendor testimony and does not freeze disk or
+  managed configuration. Already-running launch effects, unreported hooks,
+  unknown future service surfaces and configuration races remain unproved. The
+  separate Unknown startup effect and disabled production activation remain.
+- **Validation:** M5-SP02–04 cover typed/duplicate-field parsing, enabled or disabled
+  configured services, pre-registration refusal, correlation, timeout, cancellation
+  and failed report commit. M5-SP05 checks actual native rejection; M5-R05 remains
+  the empty-profile registration check. Actual outcomes are in the M5 report.
+
+## ADR-039 — Bind native launch admission to executable bytes
+
+- **Date/status:** 26 October 2026; accepted experimental M5 integrity correction.
+- **Finding:** LaunchSpec fingerprints covered canonical program/cwd paths,
+  arguments, stdio and explicit environment but omitted program bytes. A failing
+  test changed bytes at the same path and obtained an identical fingerprint.
+  Such a binding is insufficient for a later version-tested startup profile.
+- **Decision:** stream BLAKE3 over an opened regular executable at descriptor
+  construction; include that digest in the private launch-v2 fingerprint domain.
+  Before spawn, reopen the selected path and compare file identity and digest
+  against the held file. Changed identity/content refuses execution. Reuse the
+  existing native file-identity primitive; no new dependency or shell endpoint.
+- **Windows lifetime:** open with read sharing only, denying ordinary write and
+  delete/replacement access. Keep that handle through ProcessTree ownership,
+  including a drained but retained scope; release it when the scope object drops.
+  An updater may therefore need the host to release its scope before replacing
+  that executable. Process exit, crash and handle drop do not leave a durable lock.
+- **Compatibility:** database schema stays 19; envelope stays 0.1.0. Existing
+  fingerprints remain historical opaque values. New live descriptors cannot
+  match older path-only bindings, and no historical descriptor or retry can
+  recreate a native launch permit. No stored records are rewritten or reclassified.
+- **Limits:** file identity/hash is pre-spawn consistency evidence, not a signed
+  vendor identity or OS containment. Path-based exec retains ancestor/race limits;
+  Unix does not gain enforced write exclusion. Scripts, interpreters, DLLs, config,
+  plugins, child programs and external resources are not attested by the main
+  executable digest. Unknown startup and production activation stay blocked.
+- **Validation:** M5-B01–04 cover same-path byte changes, Windows writer/replacement
+  exclusion and handle release after native scope drop, Unix observed changes
+  before spawn, and stale executable admission without another permit. Native
+  Unix behavior and performance require separate evidence. See the M5 report.
+
+## ADR-040 — Evaluate native containment through an opt-in benign workload
+
+- **Date/status:** 26 October 2026; accepted feasibility tracer only, not production
+  backend adoption or a completed M5 gate.
+- **Choice:** evaluate Microsoft MXC 1.0.1 ProcessContainer using its published
+  native executor and version-1.0.0 request contract. Its Rust crate was inspected;
+  the source build expects rc.exe, unavailable on this host. No SDK source build
+  or production SDK dependency is claimed. The executor is an explicit test input,
+  downloaded only to temporary storage, not bundled or found automatically on PATH.
+- **Provenance:** public @microsoft/mxc-sdk 1.0.1 package integrity was checked
+  against its pinned SHA-512 registry metadata. The x64 executor's Authenticode
+  signature was Valid with Microsoft Corporation as signer. Its SHA-256 is
+  090F5D1F7BB93104AB08DCD4E8034EF954AEEFCDAF6658DDE5F7DFF4CFC12F3A.
+- **Policy:** require native base-container support with no warnings/errors, no
+  host DACL augmentation, native deny-path support and BFS compilation disabled.
+  Explicitly disallow DACL fallback, inherited environment, learning/audit mode
+  and networking. Use only owned temporary files, a Rust fixture and a loopback
+  listener. No host-prep command, global network exemption or user worktree ACL
+  change is permitted. Reported support alone never grants execution authority.
+- **Evidence:** compare uncontained access with contained reads and denials of
+  workspace creation, a separately denied file and a live loopback connection.
+  Use real root exit status plus independent owned-job drain, bounded output and
+  deadline. Unexpected executor diagnostics refuse the test. LOCALAPPDATA points
+  into the fixture's private temporary home; do not enable inherited environment
+  to satisfy the SDK's required-variable check.
+- **Limits:** this is a benign native policy experiment, not Codex confinement,
+  resource cleanup certification, adversarial hard-kill proof, capability issuance
+  or source activation. The SDK host and policy-file lifecycle still need a bound
+  production design. Database stays 19 and Unknown startup remains blocked.
+  No new SDK/runtime dependency or unsafe-code exception enters the engine.

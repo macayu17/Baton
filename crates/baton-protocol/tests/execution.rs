@@ -19,6 +19,128 @@ fn run() -> RunRecord {
     )
 }
 
+// M5-SP02; configuration testimony grants no thread, effect settlement or native boundary.
+#[test]
+fn startup_configuration_report_is_bounded_metadata_without_authority() {
+    let mut r = run();
+    r.apply(&RunObservation::Spawned { pid: 42 }).unwrap();
+    let observation = RunObservation::StartupConfigReported {
+        source_sequence: 1,
+        request_id: AdapterRequestId::Number(7),
+        payload_hash: "a".repeat(64),
+        services_present: false,
+    };
+    r.apply(&observation).unwrap();
+    assert_eq!(observation.origin(), ExecutionOrigin::AdapterObserved);
+    assert!(r.source_thread.is_none());
+    assert!(r.effects.is_empty());
+    assert!(!r.tree_stopped);
+    let before = r.clone();
+    let mut invalid = observation;
+    if let RunObservation::StartupConfigReported {
+        source_sequence,
+        payload_hash,
+        ..
+    } = &mut invalid
+    {
+        *source_sequence = 2;
+        *payload_hash = "bad".into();
+    }
+    assert!(r.apply(&invalid).is_err());
+    assert_eq!(r, before);
+}
+
+// M5-R01; FR-03/06/15, INV-07/09: registration requires an admitted started effect.
+#[test]
+fn thread_registration_requires_started_host_work_and_valid_identity() {
+    let mut r = run();
+    r.apply(&RunObservation::Spawned { pid: 42 }).unwrap();
+    let effect = Id::new_v4();
+    let observed = RunObservation::ThreadRegistered {
+        source_sequence: 3,
+        effect_id: effect,
+        request_id: AdapterRequestId::Text("request-1".into()),
+        payload_hash: "a".repeat(64),
+        thread_id: "thread-1".into(),
+    };
+    assert!(r.apply(&observed).is_err());
+    r.apply(&RunObservation::ToolReserved {
+        source_sequence: 1,
+        effect_id: effect,
+        class: EffectClass::Unknown,
+    })
+    .unwrap();
+    assert!(r.apply(&observed).is_err());
+    r.apply(&RunObservation::ToolStarted {
+        source_sequence: 2,
+        effect_id: effect,
+        class: EffectClass::Unknown,
+    })
+    .unwrap();
+    r.apply(&observed).unwrap();
+    assert_eq!(observed.origin(), ExecutionOrigin::AdapterObserved);
+    assert_eq!(r.effects[0].state, EffectState::Started);
+    assert!(!r.tree_stopped);
+    let mut invalid = observed;
+    if let RunObservation::ThreadRegistered {
+        thread_id,
+        source_sequence,
+        ..
+    } = &mut invalid
+    {
+        *thread_id = "../invalid".into();
+        *source_sequence = 4;
+    }
+    assert!(r.apply(&invalid).is_err());
+}
+
+// M5-R01; notification and request acknowledgement are separate facts in either order.
+#[test]
+fn thread_announcement_cannot_rebind_an_acknowledged_thread() {
+    let mut r = run();
+    r.apply(&RunObservation::Spawned { pid: 42 }).unwrap();
+    r.apply(&RunObservation::ThreadAnnounced {
+        source_sequence: 1,
+        thread_id: "thread-1".into(),
+        payload_hash: "a".repeat(64),
+    })
+    .unwrap();
+    assert_eq!(r.announced_thread.as_deref(), Some("thread-1"));
+    assert!(r.source_thread.is_none());
+    let effect = Id::new_v4();
+    r.apply(&RunObservation::ToolStarted {
+        source_sequence: 2,
+        effect_id: effect,
+        class: EffectClass::LocalReversible,
+    })
+    .unwrap();
+    assert!(r
+        .apply(&RunObservation::ThreadRegistered {
+            source_sequence: 3,
+            effect_id: effect,
+            request_id: AdapterRequestId::Number(2),
+            payload_hash: "b".repeat(64),
+            thread_id: "other-thread".into()
+        })
+        .is_err());
+}
+
+// M5-R01; only an observed disabled remote-control status is supported.
+#[test]
+fn remote_control_disabled_is_metadata_without_effect_or_authority() {
+    let mut r = run();
+    r.apply(&RunObservation::Spawned { pid: 42 }).unwrap();
+    let observation = RunObservation::RemoteControlDisabled {
+        source_sequence: 1,
+        payload_hash: "a".repeat(64),
+    };
+    r.apply(&observation).unwrap();
+    assert_eq!(observation.origin(), ExecutionOrigin::AdapterObserved);
+    assert!(r.effects.is_empty());
+    assert!(!r.tree_stopped);
+    assert!(r.source_thread.is_none());
+}
+
 // M3-P01; FR-03/06/15, INV-09: interruption is not process drain.
 #[test]
 fn m3_interrupt_ack_and_parent_exit_never_establish_quiescence() {

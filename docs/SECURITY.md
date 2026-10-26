@@ -57,11 +57,65 @@ Never upload any repository snapshot, prompt, agent transcript, or command outpu
 
 ## 5. File safety and isolation
 
+The experimental Session create-only host operation pins its cwd before spawn,
+requires a fresh native ToolPermit and accepts only flat portable filenames and
+at most 16 KiB. A domain-separated effect ID binds the complete run/operation and
+file recipe. Directory-relative create_new prevents existing leaf links or files
+from being overwritten. Ownership/root identity are checked before/after access;
+Windows held roots deny deletion/rename. File sync/readback establishes observed
+bytes, not directory power-loss durability or future integrity. Partial failures
+preserve files and attempt native teardown/loss journaling. Exact retries return
+no permit, and changed recipes conflict. Positive callbacks require the separate
+explicit host policy described below.
+Same-user adversarial races and native Unix behavior remain release limitations;
+this primitive is not a sandbox. See ADR-034 and M5-W01–06.
+
 Use fresh worktrees and a strict approved repo root; reject path traversal and any symlink/junction resolution outside allowed roots, unless explicit policy handles it. Protect `.git` internals and don't follow untrusted links when capturing. Detect submodule and LFS dependencies and symbolic file metadata issues. Never `git clean -fdx` or destructive reset a developer checkout. Restore only Baton-owned staging locations, after path validation.
 
 One valid ownership epoch does not imply ability to stop unknown processes. Enforced write isolation ideally uses OS/container boundaries; a file-edit hook is an additional check, not a comprehensive sandbox. For external production resources, Baton must not claim exclusive write control unless the resource explicitly supports fencing or access isolation.
 
 ## 6. Safe event replay and external effects
+
+Schema-17 thread registration is explicit trusted embedding, not source activation.
+The host pipe write has fresh native admission; separate vendor startup remains
+Unknown/UNCERTAIN even on a successful acknowledgement. A generic vendor thread
+can initialize configured services, so neither read-only policy metadata nor
+an empty history proves every startup effect settled. Existing unresolved-effect
+checks therefore deny subsequent host writes. Missing replies/metadata commits
+retain uncertainty; there is no automatic RPC replay or process adoption. Default
+initialization stays stable. Registration and announcement have distinct hashed
+evidence, and retained thread fields must match the journal. Startup remote IDs,
+server names and previews are omitted. Only reported disabled remote status is
+supported; it grants no isolation proof. Other statuses, warnings and unknown
+notifications stop capture. See ADR-036 and M5-R01–05.
+
+M5-SP01 provides native evidence for this distinction: installed Codex 0.164.0
+started a configured MCP child that created a temporary marker outside the test
+worktree while thread/start reported readOnly, before any model turn. Disabling
+that server suppressed the marker in the comparison. config/read exposed its
+enabled state before registration; it is not a configuration freeze or native
+confinement proof. A controlled home or a restricted tool inventory alone cannot
+settle startup uncertainty. The probe changes no production authority.
+
+Schema 19 now inspects config/read before file-thread registration and rejects
+nonempty reported MCP, hook, plugin, marketplace or notify configuration, including
+disabled entries. Malformed or uncorrelated replies fail closed. The fingerprint
+and summary must commit before thread/start; config values remain transient.
+Omitted/null entries are only absence of reported configuration. This does not
+freeze layers, attest managed hooks, cover process launch before inspection or
+resolve unknown startup. No configuration is rewritten. See ADR-038/M5-SP02–05.
+
+Schema 16 provides explicit Source::with_file_creation opt-in for the single
+baton_create_file_v1 recipe. Unknown tools/namespaces, extra arguments, unsafe names
+and oversized content fail closed. Callback intent commits before native host
+admission; host completion commits before a success response containing only the
+file digest. Written means flush, and vendor Resolved remains separate. Refusal,
+execution and approvals cannot rebind an RPC ID. Duplicate requests stop capture
+without replay, including after external deletion of the created file. Missing
+completion leaves uncertainty; missing Written after a committed completion does
+not erase that completion or invent receipt. Errors preserve files and attempt
+scope teardown/gap/loss. Raw contents are transient. This does not register vendor
+tools, activate a source or prove isolation/event completeness. See ADR-035.
 
 The experimental M5 schema-13 approval handler only emits cancel for recognized
 command/file-change requests. There is no accept, session-wide grant or policy
@@ -119,6 +173,24 @@ commit if storage fails. After success the host must stop explicitly and reconci
 uncertain drop/crash. A successful initialize response grants no writer authority,
 event completeness or safety guarantee. See ADR-028.
 
+Launch-v2 additionally binds the main executable's streamed BLAKE3 digest and
+rechecks file identity/content before spawn. Windows holds a read-sharing-only
+file handle through native scope ownership, preventing ordinary writes and direct
+replacement until the object drops. Native permissions remain unchanged. This
+does not bind dependencies, scripts or startup configuration, and path-based
+exec retains race limits; Unix gains observed-change detection, not enforced file
+immutability. Do not promote the fingerprint to vendor capability or resource
+settlement. The Unknown startup blocker remains. See ADR-039/M5-B01–04.
+
+M5-NC01–04 evaluate a signed Microsoft MXC executor only as an opt-in test input.
+The tracer accepts base-container support with no DACL augmentation, no BFS and
+no warnings/errors, then runs a benign Rust workload against temporary files and
+a live loopback listener. Native denials have an uncontained access control.
+Environment is explicit and LOCALAPPDATA is private to the fixture. No host-prep
+tool, global exemption, user worktree ACL change or model request is made. No
+SDK binary is bundled. This does not establish crash-safe resource cleanup,
+immutable production policy binding or source capability. See ADR-040.
+
 Experimental M3 launches are trusted embedding operations, not shell/MCP tools.
 Their inputs and environment are not persisted as replay recipes. Run intent is
 durable before native launch; recovery cannot reconstruct a launch permit from a
@@ -162,6 +234,18 @@ A remote network partition must not trigger blind failover: if previous process/
 Signed build artifacts, dependency auditing, release provenance, pinned lockfiles, minimal default privileges, no arbitrary postinstall scripts, transparent plugin hook trust prompts. Publish change logs and tested agent/runtime versions. Respect upstream terms and rate limits; use documented interfaces rather than scraping secret internals.
 
 ## 9. Auditing and incident handling
+
+Schema 18 protects the startup gate from inconsistent mutable execution summaries.
+Every execution event carries the resulting operational RunRecord digest and is
+hash-bound to its task-journal entry. Reads check all execution bindings/sequences
+and the latest state digest, including effect classification/status, cursors and
+thread fields. Observed-run retry results must match their own recorded state;
+newer legitimate events remain compatible with historical retries. Empty journals
+cannot invent running processes. Mismatch preserves state and returns CORRUPT_STORE
+before admission. Recomputing only the summary/event digest cannot bypass the
+separate task-journal binding. This is not a MAC/signature or protection against
+rewriting the whole private evidence graph. Unknown resource effects remain
+unsettled; no replay or new writer grant follows. See ADR-037 and M5-SG01–03.
 
 M5 lifecycle metadata never executes a captured command. The bounded parser stores
 only supported IDs, kinds and reported status/exit code, treating the vendor as an
