@@ -1,124 +1,116 @@
-# Baton — Product and Engineering Specification
+# Baton
 
-**Status:** M0–M3 libraries and the M4 experimental local CLI/daemon are implemented,
-with experimental M5 managed Codex initialization, bounded lifecycle metadata and
-cancel-only approvals, turn interruption and callback refusals added on 25 October 2026.
-Real source-work capture and agent transfer remain in progress. Native three-OS validation
-is pending; experimental engines and the executable remain disabled by default.
+Baton saves local checkpoints and event logs for coding tasks. The goal is to let another AI agent continue unfinished work with evidence of what happened. The first planned handoff is Codex to Claude Code.
 
-**One-line product statement:** Baton lets a developer stop an AI coding task in one agent and continue it in another agent or on another computer from a verifiable, recoverable execution checkpoint—not merely a written handoff.
+**This is an experimental development build.** The CLI can manage tasks, capture workspace checkpoints and restore captured files into a new Git worktree. Agent launching and automatic handoff are still under development.
 
-## Start here
+## What works today
 
-1. Copy **[CODEX_START_PROMPT.md](CODEX_START_PROMPT.md)** into a Codex session after placing this entire documentation folder at the new repository root.
-2. Read **[PRD.md](PRD.md)** for the product, users, release boundaries, requirements, and acceptance criteria.
-3. Read **[AGENTS.md](AGENTS.md)** for binding instructions to Codex and other implementation agents.
-4. Read **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** and **[docs/PROTOCOL.md](docs/PROTOCOL.md)** before implementing persistence or process control.
-5. Read **[docs/INTEGRATIONS.md](docs/INTEGRATIONS.md)** and **[docs/INSTALLATION.md](docs/INSTALLATION.md)** for integration and distribution choices.
-6. Read **[docs/SECURITY.md](docs/SECURITY.md)** and **[docs/TESTING.md](docs/TESTING.md)** before declaring any feature complete.
-7. Use **[docs/ROADMAP.md](docs/ROADMAP.md)** to implement in testable increments; record deviations in **[docs/DECISIONS.md](docs/DECISIONS.md)**.
-8. Consult **[docs/REFERENCES.md](docs/REFERENCES.md)** for official vendor documentation and revalidate version-sensitive details.
+- Enroll a Git repository without changing its files
+- Create tasks, reserve ownership and inspect their history
+- Save staged and unstaged changes, plus explicitly included untracked files
+- Verify captured file contents and restore them into a new worktree
+- Inspect task status, checkpoints and event history through the CLI or JSON
 
-## Preferred installation strategy
+Snapshots stay local. Restoration keeps the original checkout intact and refuses to overwrite existing work. Checkpoint reports include exclusion and support warnings.
 
-**Baton is a native local developer tool first.** It ships as a signed native CLI and local daemon. A built-in *local MCP server* exposes controlled tools to agents. Codex/Claude plugins and skills are optional packaging and onboarding layers; they are not the engine or the security boundary. A hosted synchronization service is a later stage.
+## Build locally
 
-- User-facing proposed commands: `baton init`, `baton doctor`, `baton start`, `baton status`, `baton checkpoint`, `baton transfer`, `baton accept`, `baton recover`, `baton mcp serve`, `baton uninstall`.
-- Transfer, agent start, MCP and installation commands remain planned. The
-  experimental CLI currently supports repository/task metadata, status/events,
-  forensic capture and isolated restoration.
-- The product should require explicit trust and consent for repository access, process supervision, instrumentation, and any cross-machine upload.
+You'll need:
 
-## First demonstrable milestone
+- Rust stable, including Cargo, rustfmt and Clippy
+- Git
+- A C/C++ build toolchain for native dependencies
 
-On **one machine**, capture unfinished Codex work at a verified safe boundary; restore a fresh Git worktree; allow Claude Code to resume with evidence of the last failed test; block stale ownership; survive injected crashes. Only call it successful if the tests in `docs/TESTING.md` pass.
+On Windows, use Visual Studio C++ Build Tools or a configured Rust GNU toolchain. Linux needs a C compiler and linker; macOS needs the Xcode Command Line Tools. Native runtime testing so far has been on Windows; Linux and macOS validation is incomplete.
 
-## Product principle
+Clone and build the CLI:
 
-**Continue the work, not the conversation.** The observable file and operation state is authoritative. Agent-generated explanations are helpful evidence, never the sole basis of correctness.
-
-## Developing the M0 baseline
-
-Install Rust stable (including rustfmt and Clippy) and Git, then run:
-
-```text
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo build --workspace --all-targets --locked
-cargo test --workspace --locked
+```sh
+git clone https://github.com/macayu17/Baton.git
+cd Baton
+cargo build -p baton-cli --features experimental --locked
 ```
 
-Windows requires either Visual Studio C++ Build Tools for MSVC or a configured
-GNU toolchain/linker. On the current development host MSVC `link.exe` is absent;
-the checks pass using `cargo +stable-x86_64-pc-windows-gnu` in place of `cargo`.
-CI uses native Windows, macOS, and Linux runners. A configured workflow is not
-evidence of a completed CI run.
+The executable is `target/debug/baton`, or `target/debug/baton.exe` on Windows. The examples below use the Unix path; in PowerShell, use `.\target\debug\baton.exe` instead.
 
-To build and test the experimental engines explicitly:
+With a configured Windows GNU toolchain, use `cargo +stable-x86_64-pc-windows-gnu` in place of `cargo`.
 
-```text
+The `experimental` feature is required to build the executable. The local CLI walkthrough does not require agent installations or API credentials.
+
+## Run the CLI
+
+Run these commands from the cloned Baton directory. This example enrolls that checkout; replace `--repo .` with another Git repository's path to use your own project. Checkpoint capture requires a repository with at least one commit.
+
+Choose an unused state directory outside all Git repositories. Its parent must already exist and belong to your account. Let Baton create the state directory:
+
+```sh
+./target/debug/baton --state "$HOME/baton-state" init --repo .
+```
+
+Start the daemon in the foreground:
+
+```sh
+./target/debug/baton --state "$HOME/baton-state" daemon
+```
+
+Keep that terminal open. From a second terminal in the Baton directory, inspect the state:
+
+```sh
+./target/debug/baton --state "$HOME/baton-state" status
+./target/debug/baton --state "$HOME/baton-state" --json status
+```
+
+Stop the daemon with Ctrl+C. Initialization does not start it automatically, and these commands do not install a background service or change global agent configuration.
+
+If startup reports `DAEMON_UNAVAILABLE`, start the daemon with the same `--state` path. If Baton refuses directory permissions, choose a location owned by your account. Development builds do not migrate older databases; keep the old state and use a new directory if its schema is unsupported.
+
+## Use tasks and checkpoints
+
+Every command uses the same `--state` directory. Run a subcommand with `--help` for its arguments:
+
+```sh
+./target/debug/baton create-task --help
+./target/debug/baton checkpoint --help
+./target/debug/baton restore --help
+```
+
+The current workflow is:
+
+| Command | What it does |
+| --- | --- |
+| `init --repo path` | Enroll a repository and return its ID |
+| `create-task` | Create a task with a goal and return its ID |
+| `claim --task task_id` | Reserve ownership and return a lease ID and epoch |
+| `checkpoint` | Capture the task's current workspace |
+| `checkpoint-info` | Inspect a checkpoint and its limitations |
+| `restore` | Restore captured files into a new worktree |
+| `status` | Inspect one task or list tasks |
+| `events --task task_id` | Read a task's event history |
+
+Use the IDs returned by earlier commands. Ownership-sensitive commands need the current `--epoch` and lease ID. Claims expire after five minutes by default; `heartbeat` renews a live claim. Reuse `--operation-id` when retrying the same request after a lost response.
+
+Untracked files require explicit inclusion through `checkpoint --include-untracked path`. Ignored files and sensitive content can be excluded, so inspect the checkpoint report before relying on a restore. The restore result includes the new worktree's path.
+
+**Agent continuation currently reports `BLOCKED`.** A checkpoint or restore can succeed while continuation remains blocked. Use `--json` to inspect the command's `result` separately from `continuation_quality`. Lease expiry never starts a replacement agent, and uncertain external operations are not replayed automatically.
+
+## Development
+
+Run the workspace checks, including the experimental engines:
+
+```sh
+cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-cargo build --workspace --all-targets --all-features --locked
 cargo test --workspace --all-features --locked
 ```
 
-Use the same Windows GNU override where needed. M1 implements transactional
-metadata reservations. M2 adds local forensic capture and fresh-worktree restore;
-all continuation outcomes remain BLOCKED. M3 adds native process control and an
-audited effect ledger through trusted embedding APIs, tested with synthetic agents.
-It grants no transfer activation and provides no filesystem/network sandbox.
-Keep databases on a private local filesystem outside repositories.
-M4 adds owner-checked local state, OS identity recovery and user-scoped IPC.
-New stores use database schema 15; schema-1 through schema-14 stores refuse without rewriting.
-Transfer intent, preflight reports and aborts are durable and auditable. They do
-not stop agents, commit ownership or activate receivers; preflight remains BLOCKED.
-Artifact restore persists intent before creating a worktree. A retry can reuse
-only its bound completion receipt after rechecking all receiver content; partial
-or unrecognized targets are preserved and refused.
-Native process scopes and observed empty-job drains now have separate immutable
-records tied to live control objects. These facts do not establish a complete
-safe transfer boundary or enable receiver activation.
-Receiver staging, ownership commit and recovery now have durable protocol paths.
-Production still cannot enter PREPARED with the missing source proofs; activation
-is explicitly disabled. Closed fixture tests exercise the storage path with
-test-only boundary assumptions, not real vendor or sandbox validation.
-See [M1 evidence](docs/M1-IMPLEMENTATION.md), [M2 evidence](docs/M2-IMPLEMENTATION.md)
-and [M3 behavior and limits](docs/M3-IMPLEMENTATION.md).
+Vendor probes are opt-in and ignored by the ordinary suite. The [M5 implementation report](docs/M5-IMPLEMENTATION.md) records their results, including the unresolved tool-inventory check. Passing local tests does not establish a working cross-agent handoff.
 
-Build the experimental native executable with
-`cargo build -p baton-cli --features experimental --locked` (use the Windows GNU
-override where needed). Initialization and daemon startup are separate opt-ins:
+For design and implementation details:
 
-The built executable is `target/debug/baton` (`target/debug/baton.exe` on Windows).
-Use that path in place of `baton` below unless it is on your PATH.
-
-```text
-baton --state <new-private-state-directory> init --repo <repository>
-baton --state <state-directory> daemon
-baton --state <state-directory> --json status
-```
-
-Run the daemon in a separate terminal and use `baton --help` for available
-commands. No global configuration or service is installed. `--operation-id`
-allows exact mutation retries; `--epoch` binds ownership-sensitive requests.
-Task/checkpoint/restore IDs default to the operation ID so a lost response does
-not require inventing a new operation. All continuation reports remain BLOCKED.
-See [M4 progress and limits](docs/M4-IMPLEMENTATION.md).
-
-The Windows simulated M4 tracer now exercises successive handoffs, retaining
-receiver edits in a fresh worktree at the next epoch. This uses private test-only
-boundary assumptions, not real Codex/Claude sessions. Tool admission is a fresh
-native-host permit distinct from observed tool events; neither saved requests nor
-lease expiry authorize replay. Production transfer remains BLOCKED. See ADR-027.
-
-M5 adds an opt-in Rust App Server client. Its actual Codex 0.164.0 handshake has
-been tested with a private temporary home, alongside malformed/oversized reply,
-EOF, timeout and cancellation tests. It does not start a model turn or grant
-continuation authority. See [M5 plan and evidence](docs/M5-IMPLEMENTATION.md).
-M5 now also records bounded turn and command/file-change lifecycle metadata with
-durable vendor IDs, idempotent retries and explicit gaps. Tool success remains
-uncertain without independent effect policy; raw command/output content is not
-captured by this slice. Real source-work and cross-agent continuation remain open.
-
-See [the M0 implementation and evidence report](docs/M0-BASELINE.md) for the
-module boundaries, schema/error policy, traceability, and remaining exit gate.
+- [Roadmap](docs/ROADMAP.md): current work and remaining milestones
+- [Architecture](docs/ARCHITECTURE.md): module and storage boundaries
+- [Protocol](docs/PROTOCOL.md) and [security](docs/SECURITY.md): ownership, recovery and safety rules
+- [Testing](docs/TESTING.md): acceptance tests and release gates
+- [Product requirements](PRD.md): intended behavior and scope
+- [Agent instructions](AGENTS.md): requirements for changing the code
